@@ -47,6 +47,17 @@ html, body {
   z-index: 20;
   flex-wrap: wrap;
 }
+
+/* Ensure panel and all interactive elements are isolated from canvas */
+.panel, .panel * {
+  pointer-events: auto;
+  user-select: none;
+}
+
+/* Prevent canvas from interfering with control panel interactions */
+#canvas-container {
+  z-index: 1;
+}
 .overlay h1 {
   margin: 0;
   font-size: 20px;
@@ -68,6 +79,9 @@ html, body {
   padding: 10px 12px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(12px);
+  position: relative;
+  flex-wrap: nowrap;
+  min-width: fit-content;
 }
 .metrics {
   display: grid;
@@ -75,6 +89,8 @@ html, body {
   gap: 4px 12px;
   font-size: 12px;
   opacity: 0.9;
+  min-width: 200px;
+  flex-shrink: 0;
 }
 .badge {
   display: inline-flex;
