@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Infinite Bento Field</title>
+  <script src="https://unpkg.com/konva@9.3.0/konva.min.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.12), transparent 32%),
+                  radial-gradient(circle at 80% 20%, rgba(244, 114, 182, 0.12), transparent 35%),
+                  #0b1224;
+      color: #e2e8f0;
+      font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+    #container {
+      width: 100vw;
+      height: 100vh;
+    }
+    .overlay {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      pointer-events: none;
+      mix-blend-mode: lighten;
+      text-shadow: 0 1px 0 rgba(15, 23, 42, 0.4);
+    }
+    .overlay h1 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: 0.02em;
+    }
+    .overlay p {
+      margin: 0;
+      font-size: 13px;
+      opacity: 0.85;
+    }
+    .panel {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      pointer-events: auto;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(226, 232, 240, 0.12);
+      border-radius: 12px;
+      padding: 10px 12px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(12px);
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, auto);
+      gap: 4px 12px;
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      font-size: 12px;
+    }
+    button {
+      pointer-events: auto;
+      background: linear-gradient(135deg, #38bdf8, #a855f7);
+      color: #0b1224;
+      border: none;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      box-shadow: 0 10px 25px rgba(56, 189, 248, 0.35);
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+    }
+    button:hover { transform: translateY(-1px); filter: brightness(1.05); }
+    button:active { transform: translateY(1px); box-shadow: 0 6px 14px rgba(56, 189, 248, 0.35); }
+  </style>
+</head>
+<body>
+  <div id="container"></div>
+  <div class="overlay">
+    <div class="panel">
+      <div>
+        <h1>Infinite Bento Field</h1>
+        <p>Grow an interlocking lattice until the viewport is covered and bled in every direction.</p>
+      </div>
+      <div class="metrics" id="metrics"></div>
+      <button id="regen">Regenerate</button>
+    </div>
+    <div class="badge">Concave-aware sizing · Edge interlock · Viewport-biased growth</div>
+  </div>
+  <script>
+    const stageWidth = window.innerWidth;
+    const stageHeight = window.innerHeight;
+    const bleed = 0.1; // grow 10% past the viewport on every side
+    const gridSize = Math.max(32, Math.floor(Math.min(stageWidth, stageHeight) / 16));
+
+    const stage = new Konva.Stage({
+      container: 'container',
+      width: stageWidth,
+      height: stageHeight,
+    });
+    const layer = new Konva.Layer();
+    stage.add(layer);
+
+    function createSeed() {
+      const base = Math.min(stageWidth, stageHeight) * 0.35;
+      return {
+        x: stageWidth / 2 - base / 2,
+        y: stageHeight / 2 - base / 2,
+        width: base,
+        height: base * 0.75,
+        color: pickColor(),
+      };
+    }
+
+    function pickColor() {
+      const palette = [
+        '#22d3ee', '#38bdf8', '#818cf8', '#a855f7', '#f472b6', '#fb7185', '#34d399', '#fbbf24', '#f59e0b'
+      ];
+      return palette[Math.floor(Math.random() * palette.length)];
+    }
+
+    function randomBetween(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function boundingBox(cards) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      cards.forEach(c => {
+        minX = Math.min(minX, c.x);
+        minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + c.width);
+        maxY = Math.max(maxY, c.y + c.height);
+      });
+      return { minX, minY, maxX, maxY };
+    }
+
+    function gridPoints() {
+      const points = [];
+      for (let x = gridSize / 2; x < stageWidth; x += gridSize) {
+        for (let y = gridSize / 2; y < stageHeight; y += gridSize) {
+          points.push({ x, y });
+        }
+      }
+      return points;
+    }
+
+    function coverageSatisfied(cards, points) {
+      return points.every(p => cards.some(c => contains(c, p)));
+    }
+
+    function contains(card, point) {
+      return point.x >= card.x && point.x <= card.x + card.width && point.y >= card.y && point.y <= card.y + card.height;
+    }
+
+    function bleedSatisfied(cards) {
+      const box = boundingBox(cards);
+      const marginX = stageWidth * bleed;
+      const marginY = stageHeight * bleed;
+      return box.minX <= -marginX && box.maxX >= stageWidth + marginX && box.minY <= -marginY && box.maxY >= stageHeight + marginY;
+    }
+
+    function overlaps(candidate, cards) {
+      return cards.some(c => {
+        const separated = candidate.x + candidate.width <= c.x || candidate.x >= c.x + c.width || candidate.y + candidate.height <= c.y || candidate.y >= c.y + c.height;
+        return !separated;
+      });
+    }
+
+    function exposeEdges(cards) {
+      const edges = [];
+      cards.forEach((c, index) => {
+        const localEdges = [
+          { orientation: 'top', line: [c.x, c.y, c.x + c.width, c.y], normal: { x: 0, y: -1 } },
+          { orientation: 'bottom', line: [c.x, c.y + c.height, c.x + c.width, c.y + c.height], normal: { x: 0, y: 1 } },
+          { orientation: 'left', line: [c.x, c.y, c.x, c.y + c.height], normal: { x: -1, y: 0 } },
+          { orientation: 'right', line: [c.x + c.width, c.y, c.x + c.width, c.y + c.height], normal: { x: 1, y: 0 } },
+        ];
+
+        localEdges.forEach(edge => {
+          const hasNeighbor = cards.some((other, otherIndex) => {
+            if (otherIndex === index) return false;
+            if (edge.orientation === 'top') {
+              return Math.abs(other.y + other.height - edge.line[1]) < 1e-3 && projectionsOverlap([edge.line[0], edge.line[2]], [other.x, other.x + other.width]);
+            }
+            if (edge.orientation === 'bottom') {
+              return Math.abs(other.y - edge.line[1]) < 1e-3 && projectionsOverlap([edge.line[0], edge.line[2]], [other.x, other.x + other.width]);
+            }
+            if (edge.orientation === 'left') {
+              return Math.abs(other.x + other.width - edge.line[0]) < 1e-3 && projectionsOverlap([edge.line[1], edge.line[3]], [other.y, other.y + other.height]);
+            }
+            if (edge.orientation === 'right') {
+              return Math.abs(other.x - edge.line[0]) < 1e-3 && projectionsOverlap([edge.line[1], edge.line[3]], [other.y, other.y + other.height]);
+            }
+            return false;
+          });
+          if (!hasNeighbor) {
+            edges.push({ ...edge, cardIndex: index });
+          }
+        });
+      });
+      return edges;
+    }
+
+    function projectionsOverlap(a, b) {
+      const [a1, a2] = a[0] <= a[1] ? a : [a[1], a[0]];
+      const [b1, b2] = b[0] <= b[1] ? b : [b[1], b[0]];
+      return a1 < b2 && b1 < a2;
+    }
+
+    function edgeMidpoint(edge) {
+      return {
+        x: (edge.line[0] + edge.line[2]) / 2,
+        y: (edge.line[1] + edge.line[3]) / 2,
+      };
+    }
+
+    function nearestUncoveredDistance(edge, uncovered) {
+      if (!uncovered.length) {
+        const mid = edgeMidpoint(edge);
+        const dx = mid.x - stageWidth / 2;
+        const dy = mid.y - stageHeight / 2;
+        return Math.hypot(dx, dy);
+      }
+      const mid = edgeMidpoint(edge);
+      let best = Infinity;
+      uncovered.forEach(p => {
+        const d = Math.hypot(mid.x - p.x, mid.y - p.y);
+        if (d < best) best = d;
+      });
+      return best;
+    }
+
+    function pickEdge(edges, uncovered) {
+      if (!edges.length) return null;
+      const scored = edges.map(edge => {
+        const distance = nearestUncoveredDistance(edge, uncovered);
+        const mid = edgeMidpoint(edge);
+        const outsidePenalty = Math.max(0, Math.abs(mid.x - stageWidth / 2) - stageWidth * 0.75) + Math.max(0, Math.abs(mid.y - stageHeight / 2) - stageHeight * 0.75);
+        return { edge, score: distance + outsidePenalty * 0.25 };
+      });
+      scored.sort((a, b) => a.score - b.score);
+      return scored[0].edge;
+    }
+
+    function concaveAwareSize(edge, cards) {
+      const length = edge.orientation === 'top' || edge.orientation === 'bottom'
+        ? edge.line[2] - edge.line[0]
+        : edge.line[3] - edge.line[1];
+      const distanceToCenter = Math.hypot(edgeMidpoint(edge).x - stageWidth / 2, edgeMidpoint(edge).y - stageHeight / 2);
+      const gradient = 1 - Math.min(1, distanceToCenter / Math.max(stageWidth, stageHeight));
+      const minSize = Math.max(64, length * 0.35 * gradient);
+      const maxSize = Math.max(minSize + 32, length * (edge.orientation === 'left' || edge.orientation === 'right' ? 1.2 : 1.5));
+      return { min: minSize, max: maxSize };
+    }
+
+    function fabricateCard(edge, cards, attempts = 12) {
+      for (let i = 0; i < attempts; i++) {
+        const sizeRange = concaveAwareSize(edge, cards);
+        const width = edge.orientation === 'top' || edge.orientation === 'bottom'
+          ? randomBetween(sizeRange.min, sizeRange.max)
+          : randomBetween(sizeRange.min * 0.6, sizeRange.max * 0.6);
+        const height = edge.orientation === 'left' || edge.orientation === 'right'
+          ? randomBetween(sizeRange.min, sizeRange.max)
+          : randomBetween(sizeRange.min * 0.6, sizeRange.max * 0.6);
+
+        const edgeLength = edge.orientation === 'top' || edge.orientation === 'bottom'
+          ? edge.line[2] - edge.line[0]
+          : edge.line[3] - edge.line[1];
+
+        const offset = randomBetween(-Math.min(width * 0.25, edgeLength * 0.2), Math.max(edgeLength - width + width * 0.25, 0));
+        const startAlong = edge.orientation === 'top' || edge.orientation === 'bottom'
+          ? edge.line[0] + offset
+          : edge.line[1] + offset;
+
+        let x = edge.line[0];
+        let y = edge.line[1];
+
+        if (edge.orientation === 'top') {
+          x = startAlong;
+          y = edge.line[1] - height;
+        } else if (edge.orientation === 'bottom') {
+          x = startAlong;
+          y = edge.line[1];
+        } else if (edge.orientation === 'left') {
+          x = edge.line[0] - width;
+          y = startAlong;
+        } else if (edge.orientation === 'right') {
+          x = edge.line[0];
+          y = startAlong;
+        }
+
+        const candidate = { x, y, width, height, color: pickColor() };
+        if (!overlaps(candidate, cards)) {
+          return candidate;
+        }
+      }
+      return null;
+    }
+
+    function generate() {
+      const cards = [createSeed()];
+      const grid = gridPoints();
+      let safety = 0;
+      while (safety < 900) {
+        safety += 1;
+        const uncovered = grid.filter(p => !cards.some(c => contains(c, p)));
+        const exposed = exposeEdges(cards);
+        const edge = pickEdge(exposed, uncovered);
+        if (!edge) break;
+        const candidate = fabricateCard(edge, cards);
+        if (candidate) {
+          cards.push(candidate);
+        }
+
+        const filled = coverageSatisfied(cards, grid);
+        const bled = bleedSatisfied(cards);
+        if (filled && bled) break;
+      }
+      return { cards, grid };
+    }
+
+    function render(cards) {
+      layer.destroyChildren();
+      const frame = new Konva.Rect({
+        x: 0.5,
+        y: 0.5,
+        width: stageWidth - 1,
+        height: stageHeight - 1,
+        stroke: 'rgba(226, 232, 240, 0.3)',
+        dash: [8, 6],
+        strokeWidth: 1,
+        listening: false,
+      });
+      layer.add(frame);
+
+      const bleedMarginX = stageWidth * bleed;
+      const bleedMarginY = stageHeight * bleed;
+      const bleedOutline = new Konva.Rect({
+        x: -bleedMarginX,
+        y: -bleedMarginY,
+        width: stageWidth + bleedMarginX * 2,
+        height: stageHeight + bleedMarginY * 2,
+        stroke: 'rgba(56, 189, 248, 0.35)',
+        dash: [10, 6],
+        strokeWidth: 1,
+        listening: false,
+      });
+      layer.add(bleedOutline);
+
+      cards.forEach((card, index) => {
+        const rect = new Konva.Rect({
+          x: card.x,
+          y: card.y,
+          width: card.width,
+          height: card.height,
+          fillLinearGradientStartPoint: { x: 0, y: 0 },
+          fillLinearGradientEndPoint: { x: card.width, y: card.height },
+          fillLinearGradientColorStops: [0, card.color, 1, Konva.Util.getRandomColor(0.25)],
+          stroke: 'rgba(226, 232, 240, 0.18)',
+          strokeWidth: 1.25,
+          shadowBlur: 12,
+          shadowColor: 'rgba(15,23,42,0.6)',
+          shadowOpacity: 0.55,
+        });
+        layer.add(rect);
+      });
+      layer.draw();
+    }
+
+    function updateMetrics(cards, grid) {
+      const filled = coverageSatisfied(cards, grid);
+      const bled = bleedSatisfied(cards);
+      const coverageRatio = grid.filter(p => cards.some(c => contains(c, p))).length / grid.length;
+      const box = boundingBox(cards);
+      const metrics = document.getElementById('metrics');
+      metrics.innerHTML = `
+        <div>Cards</div><div>${cards.length}</div>
+        <div>Coverage</div><div>${Math.round(coverageRatio * 100)}%</div>
+        <div>Bleed</div><div>${bled ? '✓ past edges' : 'growing…'}</div>
+        <div>Bounds</div><div>${Math.round(box.minX)}→${Math.round(box.maxX)} / ${Math.round(box.minY)}→${Math.round(box.maxY)}</div>
+      `;
+    }
+
+    function run() {
+      const { cards, grid } = generate();
+      render(cards);
+      updateMetrics(cards, grid);
+    }
+
+    document.getElementById('regen').addEventListener('click', run);
+
+    run();
+  </script>
+</body>
+</html>
