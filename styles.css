@@ -10,6 +10,7 @@ html, body {
   font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
 }
+
 #container {
   width: 75vw;
   height: 75vh;
@@ -21,15 +22,13 @@ html, body {
   background: rgba(15, 23, 42, 0.3);
   position: relative;
   z-index: 10;
+  overflow: visible;
 }
-#canvas-container {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 1;
+
+#container canvas {
+  display: block;
 }
+
 .overlay {
   position: fixed;
   top: 2vh;
@@ -48,26 +47,18 @@ html, body {
   flex-wrap: wrap;
 }
 
-/* Ensure panel and all interactive elements are isolated from canvas */
-.panel, .panel * {
-  pointer-events: auto;
-  user-select: none;
-}
-
-/* Prevent canvas from interfering with control panel interactions */
-#canvas-container {
-  z-index: 1;
-}
 .overlay h1 {
   margin: 0;
   font-size: 20px;
   letter-spacing: 0.02em;
 }
+
 .overlay p {
   margin: 0;
   font-size: 13px;
   opacity: 0.85;
 }
+
 .panel {
   display: flex;
   gap: 12px;
@@ -83,6 +74,7 @@ html, body {
   flex-wrap: nowrap;
   min-width: fit-content;
 }
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(2, auto);
@@ -92,6 +84,7 @@ html, body {
   min-width: 200px;
   flex-shrink: 0;
 }
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -102,6 +95,7 @@ html, body {
   border: 1px solid rgba(148, 163, 184, 0.25);
   font-size: 12px;
 }
+
 button {
   pointer-events: auto;
   background: linear-gradient(135deg, #38bdf8, #a855f7);
@@ -115,6 +109,29 @@ button {
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
 }
-button:hover { transform: translateY(-1px); filter: brightness(1.05); }
-button:active { transform: translateY(1px); box-shadow: 0 6px 14px rgba(56, 189, 248, 0.35); }
 
+button:hover { 
+  transform: translateY(-1px); 
+  filter: brightness(1.05); 
+}
+
+button:active { 
+  transform: translateY(1px); 
+  box-shadow: 0 6px 14px rgba(56, 189, 248, 0.35); 
+}
+
+input[type="range"] {
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+/* Ensure panel and all interactive elements are isolated from canvas */
+.panel, .panel * {
+  pointer-events: auto;
+  user-select: none;
+}
+
+/* Prevent canvas from interfering with control panel interactions */
+#container {
+  z-index: 1;
+}

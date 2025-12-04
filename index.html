@@ -3,35 +3,36 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Infinite Bento Field</title>
+  <title>Elastic Bento Grid</title>
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://unpkg.com/konva@9.3.0/konva.min.js"></script>
 </head>
 <body>
-  <div id="canvas-container"></div>
   <div id="container"></div>
   <div class="overlay">
     <div class="panel">
       <div>
         <h1>Elastic Bento Grid</h1>
-        <p>Semi-relative sizing with elastic density. Cards scale and multiply as space increases.</p>
+        <p>Constraint solver with smooth lerp animation</p>
       </div>
       <div class="metrics" id="metrics"></div>
       <button id="regen">Regenerate</button>
-      <button id="toggleDotGrid">Show Dot Grid</button>
       <div style="display: flex; align-items: center; gap: 8px;">
-        <label for="dotGridScale" style="font-size: 12px; opacity: 0.9;">Grid Scale:</label>
-        <input type="range" id="dotGridScale" min="0.5" max="5" step="0.1" value="1" style="width: 100px;">
-        <span id="dotGridScaleValue" style="font-size: 12px; opacity: 0.9; min-width: 30px;">1.0</span>
+        <label for="gridScale" style="font-size: 12px; opacity: 0.9;">Scale:</label>
+        <input type="range" id="gridScale" min="0.5" max="2" step="0.1" value="1" style="width: 100px;">
+        <span id="gridScaleValue" style="font-size: 12px; opacity: 0.9; min-width: 30px;">1.0</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
-        <label for="gapSpacing" style="font-size: 12px; opacity: 0.9;">Gap:</label>
-        <input type="range" id="gapSpacing" min="0" max="20" step="0.5" value="0" style="width: 100px;">
-        <span id="gapSpacingValue" style="font-size: 12px; opacity: 0.9; min-width: 30px;">0</span>
+        <label for="gap" style="font-size: 12px; opacity: 0.9;">Gap:</label>
+        <input type="range" id="gap" min="0" max="24" step="0.5" value="8" style="width: 100px;">
+        <span id="gapValue" style="font-size: 12px; opacity: 0.9; min-width: 30px;">8</span>
       </div>
-      <div id="loadingIndicator" style="position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 8px; font-size: 12px; opacity: 0.8; color: #38bdf8; white-space: nowrap; visibility: hidden;">Generating...</div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <label for="hoverScale" style="font-size: 12px; opacity: 0.9;">Hover:</label>
+        <input type="range" id="hoverScale" min="1" max="1.3" step="0.01" value="1.08" style="width: 100px;">
+        <span id="hoverScaleValue" style="font-size: 12px; opacity: 0.9; min-width: 40px;">1.08x</span>
+      </div>
     </div>
-    <div class="badge">Elastic density · Semi-relative sizing · Clipped grid · Press 'D' for debug</div>
+    <div class="badge">Hover over shapes to see constraint solver in action</div>
   </div>
   <script src="script.js"></script>
 </body>

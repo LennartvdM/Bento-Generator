@@ -1,1295 +1,900 @@
 // Elastic Bento Grid Generator
-// Generates a larger grid than viewport, clips to visible area
-// Uses elastic density: cards scale up AND count increases with space
+// Constraint solver with smooth lerp animation
 
-class ElasticBentoGrid {
-  constructor(containerWidth, containerHeight) {
-    this.containerWidth = containerWidth;
-    this.containerHeight = containerHeight;
-    this.containerArea = containerWidth * containerHeight;
-    
-    // Elastic density calculation
-    // Base reference: 1920x1080 = ~2M pixels
-    const referenceArea = 1920 * 1080;
-    const areaRatio = this.containerArea / referenceArea;
-    
-    // Base card size scales with container (fit-scale behavior)
-    // But also increases density (more cards) as space increases
-    const baseCardSize = Math.max(120, Math.min(400, 150 * Math.sqrt(areaRatio)));
-    
-    // Density multiplier: more cards per unit area as space increases
-    // Small screens: ~0.7x density, Large screens: ~1.5x density
-    const densityMultiplier = 0.7 + (areaRatio * 0.8);
-    
-    // Base grid: fine-grained grid that we'll window from
-    // Make it 2-3x finer than card size for better windowing
-    // Use square cells to ensure consistent aspect ratios
-    const baseGridCellSize = baseCardSize * 0.4; // Fine-grained base grid
-    
-    // Calculate desired grid dimensions (1.5x container for bleed)
-    const desiredGridWidth = containerWidth * 1.5;
-    const desiredGridHeight = containerHeight * 1.5;
-    
-    // Calculate number of cells needed
-    this.baseCols = Math.ceil(desiredGridWidth / baseGridCellSize);
-    this.baseRows = Math.ceil(desiredGridHeight / baseGridCellSize);
-    
-    // Use the SAME cell size for both dimensions to ensure square cells
-    // This ensures all cards with the same window size have identical dimensions
-    this.baseCellWidth = baseGridCellSize;
-    this.baseCellHeight = baseGridCellSize;
-    
-    // Calculate actual grid dimensions based on cell count
-    // This ensures perfect alignment
-    this.gridWidth = this.baseCols * this.baseCellWidth;
-    this.gridHeight = this.baseRows * this.baseCellHeight;
-    
-    // Calculate grid offset to center the larger grid within container
-    // The grid should extend equally beyond container on each side
-    // Use actual grid dimensions to ensure perfect alignment
-    this.gridOffsetX = (containerWidth - this.gridWidth) / 2;
-    this.gridOffsetY = (containerHeight - this.gridHeight) / 2;
-    
-  }
+const PALETTE = [
+  '#22d3ee', '#38bdf8', '#60a5fa', '#3b82f6', '#2563eb',
+  '#34d399', '#10b981', '#14b8a6', '#06b6d4', '#0891b2',
+  '#0ea5e9', '#0284c7', '#0d9488', '#059669', '#2dd4bf', '#5eead4'
+];
+
+// Get bento shape templates
+function getBentoShapes() {
+  const shapes = [];
+  const sizes = [
+    { w: 1, h: 1 }, { w: 2, h: 2 }, { w: 3, h: 3 },
+    { w: 2, h: 1 }, { w: 3, h: 1 }, { w: 4, h: 1 },
+    { w: 2, h: 3 }, { w: 3, h: 2 }, { w: 4, h: 2 },
+    { w: 1, h: 2 }, { w: 1, h: 3 }, { w: 1, h: 4 },
+    { w: 2, h: 4 }, { w: 3, h: 4 }, { w: 4, h: 3 }, { w: 4, h: 4 },
+  ];
   
-  // Bento shape definitions - typical rectangular bento box shapes + L-shaped corners
-  // Each shape is defined by width, height, and block positions
-  getBentoShapes() {
-    const shapes = [];
-    
-    // Common bento rectangle sizes (width x height in grid cells)
-    const sizes = [
-      // Small squares
-      { w: 1, h: 1 },
-      { w: 2, h: 2 },
-      { w: 3, h: 3 },
-      
-      // Horizontal rectangles
-      { w: 2, h: 1 },
-      { w: 3, h: 1 },
-      { w: 4, h: 1 },
-      { w: 2, h: 3 },
-      { w: 3, h: 2 },
-      { w: 4, h: 2 },
-      
-      // Vertical rectangles
-      { w: 1, h: 2 },
-      { w: 1, h: 3 },
-      { w: 1, h: 4 },
-      { w: 2, h: 4 },
-      { w: 3, h: 4 },
-      
-      // Larger rectangles
-      { w: 4, h: 3 },
-      { w: 3, h: 4 },
-      { w: 4, h: 4 },
-    ];
-    
-    // Generate blocks for each rectangular size
-    sizes.forEach(size => {
-      const blocks = [];
-      for (let y = 0; y < size.h; y++) {
-        for (let x = 0; x < size.w; x++) {
-          blocks.push([x, y]);
-        }
-      }
-      shapes.push({
-        name: `${size.w}x${size.h}`,
-        blocks: blocks,
-        width: size.w,
-        height: size.h
-      });
-    });
-    
-    // Add balanced 3-block L-shapes (corner pieces) in all 4 rotations
-    // Balanced means: horizontal and vertical parts have same width/height
-    // Example: 1-block corner with 1-block horizontal and 1-block vertical
-    const lShapes3Block = [
-      // L pointing right-down: corner + 1 horizontal + 1 vertical (balanced)
-      { name: 'L-3-0', blocks: [[0,0], [1,0], [0,1]], width: 2, height: 2 },
-      // L pointing down-left: corner + 1 vertical + 1 horizontal (balanced)
-      { name: 'L-3-90', blocks: [[0,0], [0,1], [1,1]], width: 2, height: 2 },
-      // L pointing left-up: corner + 1 horizontal + 1 vertical (balanced)
-      { name: 'L-3-180', blocks: [[1,0], [0,1], [1,1]], width: 2, height: 2 },
-      // L pointing up-right: corner + 1 horizontal + 1 vertical (balanced)
-      { name: 'L-3-270', blocks: [[0,0], [1,0], [1,1]], width: 2, height: 2 },
-    ];
-    shapes.push(...lShapes3Block);
-    
-    // Add balanced scaled-up L-shapes (2x2 units)
-    // Balanced: 2x2 corner with 2x2 horizontal and 2x2 vertical parts
-    const lShapesScaled = [
-      // Large L pointing right-down: 2x2 corner + 2x2 horizontal + 2x2 vertical
-      { 
-        name: 'L-scaled-0', 
-        blocks: [
-          [0,0], [1,0], [0,1], [1,1],  // 2x2 corner
-          [2,0], [3,0], [2,1], [3,1],  // 2x2 horizontal part
-          [0,2], [1,2], [0,3], [1,3]   // 2x2 vertical part
-        ], 
-        width: 4, 
-        height: 4 
-      },
-      // Large L pointing down-left: 2x2 corner + 2x2 vertical + 2x2 horizontal
-      { 
-        name: 'L-scaled-90', 
-        blocks: [
-          [0,0], [1,0], [0,1], [1,1],  // 2x2 corner
-          [0,2], [1,2], [0,3], [1,3],  // 2x2 vertical part
-          [2,2], [3,2], [2,3], [3,3]   // 2x2 horizontal part
-        ], 
-        width: 4, 
-        height: 4 
-      },
-      // Large L pointing left-up: 2x2 corner + 2x2 horizontal + 2x2 vertical
-      { 
-        name: 'L-scaled-180', 
-        blocks: [
-          [2,0], [3,0], [2,1], [3,1],  // 2x2 corner
-          [0,1], [1,1], [0,2], [1,2],  // 2x2 horizontal part
-          [2,2], [3,2], [2,3], [3,3]   // 2x2 vertical part
-        ], 
-        width: 4, 
-        height: 4 
-      },
-      // Large L pointing up-right: 2x2 corner + 2x2 horizontal + 2x2 vertical
-      { 
-        name: 'L-scaled-270', 
-        blocks: [
-          [0,0], [1,0], [0,1], [1,1],  // 2x2 corner
-          [2,0], [3,0], [2,1], [3,1],  // 2x2 horizontal part
-          [0,2], [1,2], [0,3], [1,3]   // 2x2 vertical part
-        ], 
-        width: 4, 
-        height: 4 
-      },
-    ];
-    shapes.push(...lShapesScaled);
-    
-    // Sort by area (larger first) to prioritize filling
-    return shapes.sort((a, b) => (b.width * b.height) - (a.width * a.height));
-  }
-  
-  // Generate Bento shapes that connect grid dots
-  // Only shapes within or straddling container, no fully outside, no empty space
-  generateSquares(gridScale = 1.0) {
-    const shapes = [];
-    const occupied = new Set();
-    
-    // Use scaled cell size (matches dot grid)
-    const scaledCellWidth = this.baseCellWidth * gridScale;
-    const scaledCellHeight = this.baseCellHeight * gridScale;
-    
-    // Calculate grid bounds in container coordinates
-    const gridOriginX = this.gridOffsetX;
-    const gridOriginY = this.gridOffsetY;
-    
-    // Container bounds in grid coordinates
-    const containerLeft = 0;
-    const containerTop = 0;
-    const containerRight = this.containerWidth;
-    const containerBottom = this.containerHeight;
-    
-    // Calculate how many scaled cells fit in the grid
-    const scaledCols = Math.ceil(this.gridWidth / scaledCellWidth);
-    const scaledRows = Math.ceil(this.gridHeight / scaledCellHeight);
-    
-    // Get all Bento shape templates
-    const bentoShapes = this.getBentoShapes();
-    
-    // Keep placing until container is completely filled (no deficits allowed)
-    // Use much more reasonable limits to avoid freezing
-    let maxAttempts = Math.min(3000, scaledRows * scaledCols * 2); // Cap at 3000 for better performance
-    let attempts = 0;
-    let consecutiveFailures = 0;
-    const maxConsecutiveFailures = 40; // Reduced failure tolerance
-    
-    while (attempts < maxAttempts && consecutiveFailures < maxConsecutiveFailures) {
-      attempts++;
-      
-      // Check for empty space less frequently (it's still expensive)
-      if (attempts % 20 === 0) {
-        const hasEmpty = this.hasEmptySpace(shapes, containerLeft, containerTop, containerRight, containerBottom, scaledCellWidth, scaledCellHeight, gridOriginX, gridOriginY);
-        if (!hasEmpty) {
-          // No empty space found - we're done
-          break;
-        }
-      }
-      
-      // Try to find a placement - use smarter search strategy
-      let bestPlacement = null;
-      let bestScore = -Infinity;
-      
-      // Generate candidate positions more efficiently
-      // Sample positions rather than checking every single one
-      const candidates = [];
-      const maxCandidates = 300; // Reduced for better performance
-      
-      // Create a list of potential positions (prioritize unoccupied areas)
-      for (let i = 0; i < maxCandidates; i++) {
-        const row = Math.floor(Math.random() * scaledRows);
-        const col = Math.floor(Math.random() * scaledCols);
-        candidates.push({ row, col });
-      }
-      
-      // Also add some edge positions for better filling
-      for (let edge = 0; edge < Math.min(20, scaledRows); edge++) {
-        candidates.push({ row: scaledRows - 1 - edge, col: Math.floor(Math.random() * scaledCols) });
-        candidates.push({ row: Math.floor(Math.random() * scaledRows), col: scaledCols - 1 - edge });
-      }
-      
-      // Try each candidate position with each shape
-      for (const { row, col } of candidates) {
-        for (const shapeTemplate of bentoShapes) {
-          // Check if shape fits within grid bounds (using width/height for rectangles)
-          if (row + shapeTemplate.height > scaledRows || col + shapeTemplate.width > scaledCols) continue;
-          
-          // Check if all blocks in shape are unoccupied
-          let canPlace = true;
-          const blockPositions = [];
-          for (const block of shapeTemplate.blocks) {
-            const blockRow = row + block[1];
-            const blockCol = col + block[0];
-            const key = `${blockRow},${blockCol}`;
-            if (occupied.has(key)) {
-              canPlace = false;
-              break;
-            }
-            blockPositions.push({ row: blockRow, col: blockCol, key });
-          }
-          
-          if (!canPlace) continue;
-          
-          // Calculate shape bounding box to connect dots
-          // For L-shapes, calculate from actual block positions
-          const minCol = Math.min(...shapeTemplate.blocks.map(b => b[0]));
-          const minRow = Math.min(...shapeTemplate.blocks.map(b => b[1]));
-          const maxCol = Math.max(...shapeTemplate.blocks.map(b => b[0]));
-          const maxRow = Math.max(...shapeTemplate.blocks.map(b => b[1]));
-          
-          const x = gridOriginX + (col + minCol + 0.5) * scaledCellWidth;
-          const y = gridOriginY + (row + minRow + 0.5) * scaledCellHeight;
-          const width = (maxCol - minCol + 1) * scaledCellWidth;
-          const height = (maxRow - minRow + 1) * scaledCellHeight;
-          
-          // Check if fully outside container
-          const shapeRight = x + width;
-          const shapeBottom = y + height;
-          const isFullyOutside = shapeRight <= containerLeft || x >= containerRight ||
-                                shapeBottom <= containerTop || y >= containerBottom;
-          
-          if (isFullyOutside) continue;
-          
-          // Score: prioritize filling empty space
-          const shapeLeft = x;
-          const shapeTop = y;
-          const isFullyInside = shapeLeft >= containerLeft && shapeRight <= containerRight &&
-                               shapeTop >= containerTop && shapeBottom <= containerBottom;
-          const isStraddling = !isFullyInside && !isFullyOutside;
-          
-          // Calculate overlap area with container
-          const overlapLeft = Math.max(shapeLeft, containerLeft);
-          const overlapRight = Math.min(shapeRight, containerRight);
-          const overlapTop = Math.max(shapeTop, containerTop);
-          const overlapBottom = Math.min(shapeBottom, containerBottom);
-          const overlapWidth = Math.max(0, overlapRight - overlapLeft);
-          const overlapHeight = Math.max(0, overlapBottom - overlapTop);
-          const overlapArea = overlapWidth * overlapHeight;
-          
-          // Prioritize bottom/right edges
-          const distToBottom = Math.abs(shapeBottom - containerBottom);
-          const distToRight = Math.abs(shapeRight - containerRight);
-          const bottomEdgeBonus = distToBottom < scaledCellWidth * 3 ? 500 : 0;
-          const rightEdgeBonus = distToRight < scaledCellWidth * 3 ? 300 : 0;
-          
-          // Base score: fully inside > straddling, overlap area is important
-          const baseScore = (isFullyInside ? 1000 : isStraddling ? 800 : 0);
-          const score = baseScore + overlapArea * 0.1 + bottomEdgeBonus + rightEdgeBonus;
-          
-          if (score > bestScore) {
-            bestScore = score;
-            bestPlacement = { 
-              row, 
-              col, 
-              shapeTemplate, 
-              blockPositions,
-              x, 
-              y, 
-              width, 
-              height,
-              blocks: shapeTemplate.blocks
-            };
-          }
-        }
-      }
-      
-      if (bestPlacement) {
-        consecutiveFailures = 0;
-        
-        // Double-check all blocks are still unoccupied (race condition protection)
-        let allFree = true;
-        for (const blockPos of bestPlacement.blockPositions) {
-          if (occupied.has(blockPos.key)) {
-            allFree = false;
-            break;
-          }
-        }
-        
-        if (!allFree) {
-          // Skip this placement if blocks were occupied between check and placement
-          consecutiveFailures++;
-          // Don't place this shape, but continue the loop
-        } else {
-          // Mark all blocks in shape as occupied
-        for (const blockPos of bestPlacement.blockPositions) {
-          occupied.add(blockPos.key);
-        }
-        
-        // Calculate block positions relative to shape origin
-        // For rectangular shapes, we can use the bounding box
-        // For L-shapes, we need individual block positions
-        const isRectangular = bestPlacement.shapeTemplate.blocks.length === (bestPlacement.shapeTemplate.width * bestPlacement.shapeTemplate.height);
-        
-        shapes.push({
-          x: bestPlacement.x,
-          y: bestPlacement.y,
-          width: bestPlacement.width,
-          height: bestPlacement.height,
-          blocks: bestPlacement.blocks.map(b => {
-            // Each block is positioned at a dot center
-            const blockCol = bestPlacement.col + b[0];
-            const blockRow = bestPlacement.row + b[1];
-            return {
-              x: gridOriginX + (blockCol + 0.5) * scaledCellWidth,
-              y: gridOriginY + (blockRow + 0.5) * scaledCellHeight,
-              width: scaledCellWidth,
-              height: scaledCellHeight
-            };
-          }),
-          shapeName: bestPlacement.shapeTemplate.name,
-          isRectangular: isRectangular // Flag to know if we can render as single rect
-        });
-        
-          consecutiveFailures = 0; // Reset on successful placement
-        }
-      } else {
-        consecutiveFailures++;
-        // If we can't find placements, check for empty space more aggressively
-        if (consecutiveFailures >= 20) {
-          const hasEmpty = this.hasEmptySpace(shapes, containerLeft, containerTop, containerRight, containerBottom, scaledCellWidth, scaledCellHeight, gridOriginX, gridOriginY);
-          if (!hasEmpty) {
-            // No empty space - we're done
-            break;
-          }
-          // Still has empty space - reset failure counter and keep trying
-          consecutiveFailures = 0;
-        }
+  sizes.forEach(size => {
+    const blocks = [];
+    for (let y = 0; y < size.h; y++) {
+      for (let x = 0; x < size.w; x++) {
+        blocks.push([x, y]);
       }
     }
-    
-    return shapes;
-  }
+    shapes.push({ name: `${size.w}x${size.h}`, blocks, width: size.w, height: size.h });
+  });
   
-  // Physics-based gap adjustment: shapes float freely after initial grid placement
-  adjustGapsWithPhysics(shapes, gapSize, iterations = 50, damping = 0.8) {
-    if (shapes.length === 0) return shapes;
-    
-    // Create a copy of shapes with velocity and force tracking
-    // Shapes are now free to float - not constrained to grid
-    const physicsShapes = shapes.map(shape => ({
-      ...shape,
-      vx: 0, // velocity x
-      vy: 0, // velocity y
-      fx: 0, // force x
-      fy: 0, // force y
-      centerX: shape.x + shape.width / 2,
-      centerY: shape.y + shape.height / 2,
-      // Store original block positions for L-shapes (will be updated as shape moves)
-      originalBlocks: shape.blocks ? shape.blocks.map(b => ({...b})) : null
-    }));
-    
-    const containerCenterX = this.containerWidth / 2;
-    const containerCenterY = this.containerHeight / 2;
-    
-    // Physics constants - shapes float freely, not constrained to grid
-    const repulsionStrength = 1.5; // Strong enough to break free from grid positions
-    const centralPushStrength = 0.08; // Stronger central push to distribute shapes
-    const minDistance = gapSize + 20; // Desired gap + buffer for consistent spacing
-    const timeStep = 0.2; // Larger time step for faster movement
-    
-    // Run physics simulation
-    for (let iter = 0; iter < iterations; iter++) {
-      // Reset forces
-      physicsShapes.forEach(shape => {
-        shape.fx = 0;
-        shape.fy = 0;
-      });
-      
-      // Calculate repulsion forces between all pairs of shapes
-      for (let i = 0; i < physicsShapes.length; i++) {
-        const shapeA = physicsShapes[i];
-        
-        // Central push force (outward from center)
-        const dxFromCenter = shapeA.centerX - containerCenterX;
-        const dyFromCenter = shapeA.centerY - containerCenterY;
-        const distFromCenter = Math.sqrt(dxFromCenter * dxFromCenter + dyFromCenter * dyFromCenter);
-        if (distFromCenter > 0) {
-          const pushForce = centralPushStrength * distFromCenter;
-          shapeA.fx += (dxFromCenter / distFromCenter) * pushForce;
-          shapeA.fy += (dyFromCenter / distFromCenter) * pushForce;
-        }
-        
-        // Repulsion from other shapes
-        for (let j = i + 1; j < physicsShapes.length; j++) {
-          const shapeB = physicsShapes[j];
-          
-          // Calculate actual closest distance between shape boundaries
-          const aLeft = shapeA.x;
-          const aRight = shapeA.x + shapeA.width;
-          const aTop = shapeA.y;
-          const aBottom = shapeA.y + shapeA.height;
-          
-          const bLeft = shapeB.x;
-          const bRight = shapeB.x + shapeB.width;
-          const bTop = shapeB.y;
-          const bBottom = shapeB.y + shapeB.height;
-          
-          // Calculate overlap or gap
-          const overlapX = Math.max(0, Math.min(aRight, bRight) - Math.max(aLeft, bLeft));
-          const overlapY = Math.max(0, Math.min(aBottom, bBottom) - Math.max(aTop, bTop));
-          
-          let distance, dx, dy;
-          
-          if (overlapX > 0 && overlapY > 0) {
-            // Shapes overlap - strong repulsion
-            distance = -Math.min(overlapX, overlapY);
-            dx = shapeB.centerX - shapeA.centerX;
-            dy = shapeB.centerY - shapeA.centerY;
-            const centerDist = Math.sqrt(dx * dx + dy * dy);
-            if (centerDist > 0) {
-              dx = dx / centerDist;
-              dy = dy / centerDist;
-            } else {
-              dx = 1; dy = 0; // Default direction if centers coincide
-            }
-          } else {
-            // Shapes don't overlap - calculate closest edge distance
-            const gapX = overlapX > 0 ? 0 : (aRight < bLeft ? bLeft - aRight : aLeft - bRight);
-            const gapY = overlapY > 0 ? 0 : (aBottom < bTop ? bTop - aBottom : aTop - bBottom);
-            distance = Math.sqrt(gapX * gapX + gapY * gapY);
-            
-            // Direction from A to B
-            dx = shapeB.centerX - shapeA.centerX;
-            dy = shapeB.centerY - shapeA.centerY;
-            const centerDist = Math.sqrt(dx * dx + dy * dy);
-            if (centerDist > 0) {
-              dx = dx / centerDist;
-              dy = dy / centerDist;
-            } else {
-              dx = 1; dy = 0;
-            }
-          }
-          
-          // Apply repulsion force based on desired gap
-          const desiredGap = gapSize;
-          const forceMagnitude = distance < desiredGap 
-            ? repulsionStrength * (desiredGap - distance) * 2 // Strong repulsion when too close
-            : 0; // No force when gap is adequate
-          
-          if (forceMagnitude > 0 || distance < 0) {
-            const fx = dx * forceMagnitude;
-            const fy = dy * forceMagnitude;
-            
-            // Apply equal and opposite forces
-            shapeA.fx -= fx;
-            shapeA.fy -= fy;
-            shapeB.fx += fx;
-            shapeB.fy += fy;
-          }
-        }
-      }
-      
-      // Update velocities and positions with collision detection
-      physicsShapes.forEach((shape, idx) => {
-        // Store original position for block updates
-        const originalX = shape.x;
-        const originalY = shape.y;
-        
-        // Update velocity with damping
-        shape.vx = (shape.vx + shape.fx * timeStep) * damping;
-        shape.vy = (shape.vy + shape.fy * timeStep) * damping;
-        
-        // Limit velocity to prevent overshooting
-        const maxVelocity = 5;
-        shape.vx = Math.max(-maxVelocity, Math.min(maxVelocity, shape.vx));
-        shape.vy = Math.max(-maxVelocity, Math.min(maxVelocity, shape.vy));
-        
-        // Update position
-        const newCenterX = shape.centerX + shape.vx * timeStep;
-        const newCenterY = shape.centerY + shape.vy * timeStep;
-        
-        // Calculate new shape position (maintain shape dimensions)
-        let newX = newCenterX - shape.width / 2;
-        let newY = newCenterY - shape.height / 2;
-        
-        // Check for collisions with other shapes
-        let hasCollision = false;
-        for (let j = 0; j < physicsShapes.length; j++) {
-          if (j === idx) continue;
-          const otherShape = physicsShapes[j];
-          
-          const newRight = newX + shape.width;
-          const newBottom = newY + shape.height;
-          const otherRight = otherShape.x + otherShape.width;
-          const otherBottom = otherShape.y + otherShape.height;
-          
-          // Check for overlap
-          if (newX < otherRight && newRight > otherShape.x &&
-              newY < otherBottom && newBottom > otherShape.y) {
-            hasCollision = true;
-            break;
-          }
-        }
-        
-        // If collision detected, allow gradual separation (shapes can float freely)
-        if (hasCollision) {
-          // Reduce velocity but allow some movement for gradual separation
-          shape.vx *= 0.4;
-          shape.vy *= 0.4;
-          // Allow small movement to help shapes separate
-          newX = originalX + shape.vx * timeStep * 0.5;
-          newY = originalY + shape.vy * timeStep * 0.5;
-        }
-        
-        // Boundary constraints (keep shapes within container or allow slight overflow for straddling)
-        const margin = 50; // Allow some overflow for shapes that can straddle
-        const clampedX = Math.max(-margin, Math.min(this.containerWidth - shape.width + margin, newX));
-        const clampedY = Math.max(-margin, Math.min(this.containerHeight - shape.height + margin, newY));
-        
-        // Calculate movement delta
-        const dx = clampedX - originalX;
-        const dy = clampedY - originalY;
-        
-        shape.x = clampedX;
-        shape.y = clampedY;
-        shape.centerX = clampedX + shape.width / 2;
-        shape.centerY = clampedY + shape.height / 2;
-        
-        // Update block positions for L-shapes (maintain relative positions as shape floats)
-        if (!shape.isRectangular && shape.blocks && shape.originalBlocks) {
-          shape.blocks.forEach((block, blockIdx) => {
-            // Maintain relative position from shape origin
-            const relX = shape.originalBlocks[blockIdx].x - (shape.originalBlocks[0]?.x || 0);
-            const relY = shape.originalBlocks[blockIdx].y - (shape.originalBlocks[0]?.y || 0);
-            // Update block position relative to new shape position
-            block.x = shape.x + relX;
-            block.y = shape.y + relY;
-          });
-        }
-      });
-    }
-    
-    // Return updated shapes
-    return physicsShapes.map(shape => {
-      const { vx, vy, fx, fy, centerX, centerY, ...shapeData } = shape;
-      return shapeData;
-    });
-  }
-  
-  // Check if container has empty space - optimized grid-based approach
-  hasEmptySpace(shapes, containerLeft, containerTop, containerRight, containerBottom, cellWidth, cellHeight, gridOriginX, gridOriginY) {
-    // Use a coarser grid for faster checking - still accurate enough
-    const gridCols = Math.ceil((containerRight - containerLeft) / cellWidth);
-    const gridRows = Math.ceil((containerBottom - containerTop) / cellHeight);
-    
-    // Create a coverage grid (much faster than point sampling)
-    const covered = new Set();
-    
-    // Mark grid cells covered by shape blocks
-    shapes.forEach(shape => {
-      shape.blocks.forEach(block => {
-        // Calculate which grid cells this block covers
-        const blockLeft = block.x;
-        const blockRight = block.x + block.width;
-        const blockTop = block.y;
-        const blockBottom = block.y + block.height;
-        
-        // Find grid cell range
-        const startCol = Math.max(0, Math.floor((blockLeft - containerLeft) / cellWidth));
-        const endCol = Math.min(gridCols - 1, Math.floor((blockRight - containerLeft) / cellWidth));
-        const startRow = Math.max(0, Math.floor((blockTop - containerTop) / cellHeight));
-        const endRow = Math.min(gridRows - 1, Math.floor((blockBottom - containerTop) / cellHeight));
-        
-        // Mark all covered cells
-        for (let row = startRow; row <= endRow; row++) {
-          for (let col = startCol; col <= endCol; col++) {
-            covered.add(`${row},${col}`);
-          }
-        }
-      });
-    });
-    
-    const totalCells = gridCols * gridRows;
-    const coveredCount = covered.size;
-    
-    // Check bottom edge (last 2 rows)
-    const bottomEdgeCells = new Set();
-    for (let row = Math.max(0, gridRows - 2); row < gridRows; row++) {
-      for (let col = 0; col < gridCols; col++) {
-        if (covered.has(`${row},${col}`)) {
-          bottomEdgeCells.add(`${row},${col}`);
-        }
-      }
-    }
-    const bottomEdgeCoverage = bottomEdgeCells.size / (gridCols * Math.min(2, gridRows));
-    
-    // Check right edge (last 2 columns)
-    const rightEdgeCells = new Set();
-    for (let col = Math.max(0, gridCols - 2); col < gridCols; col++) {
-      for (let row = 0; row < gridRows; row++) {
-        if (covered.has(`${row},${col}`)) {
-          rightEdgeCells.add(`${row},${col}`);
-        }
-      }
-    }
-    const rightEdgeCoverage = rightEdgeCells.size / (gridRows * Math.min(2, gridCols));
-    
-    // Check overall coverage
-    const overallCoverage = coveredCount / totalCells;
-    
-    // Return true if ANY area has gaps (no deficits allowed)
-    // Use 99% threshold to account for edge cases and floating point precision
-    return overallCoverage < 0.99 || bottomEdgeCoverage < 0.95 || rightEdgeCoverage < 0.95;
-  }
-  
-  // Get metrics for display
-  getMetrics(containerWidth, containerHeight) {
-    return {
-      containerSize: `${Math.round(containerWidth)}×${Math.round(containerHeight)}`,
-      baseGrid: `${this.baseCols}×${this.baseRows}`,
-      cellSize: `${Math.round(this.baseCellWidth)}×${Math.round(this.baseCellHeight)}`,
-      gridArea: `${Math.round(this.gridWidth)}×${Math.round(this.gridHeight)}`
-    };
-  }
+  return shapes.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 }
 
-// Konva rendering - fullscreen with mask overlay
-class BentoRenderer {
-  constructor(canvasContainerId, containerWidth, containerHeight) {
-    // Fullscreen stage
-    this.stage = new Konva.Stage({
-      container: canvasContainerId,
-      width: window.innerWidth,
-      height: window.innerHeight,
-    });
-    
-    // Store container dimensions and position
-    this.containerWidth = containerWidth;
-    this.containerHeight = containerHeight;
-    this.updateContainerPosition();
-    
-    // Mask layer - darkens area outside container
-    this.maskLayer = new Konva.Layer();
-    this.stage.add(this.maskLayer);
-    
-    // Debug layer for grid visualization (optional)
-    this.debugLayer = new Konva.Layer({ visible: false });
-    this.stage.add(this.debugLayer);
-    
-    // Dot grid layer - added last so it renders on top
-    this.dotGridLayer = new Konva.Layer({ visible: false });
-    this.stage.add(this.dotGridLayer);
-    
-    // Squares layer - renders squares that connect grid dots
-    this.squaresLayer = new Konva.Layer({ visible: true });
-    this.stage.add(this.squaresLayer);
-    
-    this.dotGridScale = 1.0;
-    this.gapSpacing = 0;
-    this.currentGrid = null;
-    this.currentSquares = [];
-    
-    this.updateMask();
-  }
+// Generate grid with shapes
+function generateGrid(width, height, gridScale, gap) {
+  const cellSize = 50 * gridScale;
+  const cols = Math.ceil(width / (cellSize + gap));
+  const rows = Math.ceil(height / (cellSize + gap));
+  const occupied = new Set();
+  const shapes = [];
+  const bentoShapes = getBentoShapes();
   
-  updateContainerPosition() {
-    // Calculate container position (centered, 75vw x 75vh)
-    this.containerX = (window.innerWidth - this.containerWidth) / 2;
-    this.containerY = (window.innerHeight - this.containerHeight) / 2;
-  }
+  const isOccupied = (r, c) => occupied.has(`${r},${c}`);
   
-  updateContainerPosition() {
-    // Calculate container position (centered, 75vw x 75vh)
-    this.containerX = (window.innerWidth - this.containerWidth) / 2;
-    this.containerY = (window.innerHeight - this.containerHeight) / 2;
-  }
-  
-  updateMask() {
-    // Clear existing mask
-    this.maskLayer.destroyChildren();
-    
-    // Create mask that covers everything except the container area
-    // We'll use a composite approach: cover entire screen, then cut out container
-    
-    // Top rectangle
-    if (this.containerY > 0) {
-      this.maskLayer.add(new Konva.Rect({
-        x: 0,
-        y: 0,
-        width: window.innerWidth,
-        height: this.containerY,
-        fill: 'rgba(0, 0, 0, 0.5)',
-        listening: false,
-      }));
+  const findEmptyCell = () => {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (!isOccupied(r, c)) return { row: r, col: c };
+      }
     }
-    
-    // Bottom rectangle
-    const bottomY = this.containerY + this.containerHeight;
-    if (bottomY < window.innerHeight) {
-      this.maskLayer.add(new Konva.Rect({
-        x: 0,
-        y: bottomY,
-        width: window.innerWidth,
-        height: window.innerHeight - bottomY,
-        fill: 'rgba(0, 0, 0, 0.5)',
-        listening: false,
-      }));
-    }
-    
-    // Left rectangle
-    if (this.containerX > 0) {
-      this.maskLayer.add(new Konva.Rect({
-        x: 0,
-        y: this.containerY,
-        width: this.containerX,
-        height: this.containerHeight,
-        fill: 'rgba(0, 0, 0, 0.5)',
-        listening: false,
-      }));
-    }
-    
-    // Right rectangle
-    const rightX = this.containerX + this.containerWidth;
-    if (rightX < window.innerWidth) {
-      this.maskLayer.add(new Konva.Rect({
-        x: rightX,
-        y: this.containerY,
-        width: window.innerWidth - rightX,
-        height: this.containerHeight,
-        fill: 'rgba(0, 0, 0, 0.5)',
-        listening: false,
-      }));
-    }
-    
-    this.maskLayer.draw();
-  }
+    return null;
+  };
   
-  renderGrid(grid) {
-    // Optional: render grid visualization
-    this.debugLayer.destroyChildren();
-    
-    const offsetX = this.containerX;
-    const offsetY = this.containerY;
-    
-    const gridRect = new Konva.Rect({
-      x: grid.gridOffsetX + offsetX,
-      y: grid.gridOffsetY + offsetY,
-      width: grid.gridWidth,
-      height: grid.gridHeight,
-      stroke: 'rgba(59, 130, 246, 0.3)',
-      strokeWidth: 1,
-      dash: [4, 4],
-    });
-    this.debugLayer.add(gridRect);
-    
-    // Container outline
-    const containerRect = new Konva.Rect({
-      x: this.containerX,
-      y: this.containerY,
-      width: this.containerWidth,
-      height: this.containerHeight,
-      stroke: 'rgba(244, 114, 182, 0.5)',
-      strokeWidth: 2,
-    });
-    this.debugLayer.add(containerRect);
-    
-    this.debugLayer.draw();
-  }
+  const tryPlace = (template, row, col) => {
+    if (row + template.height > rows || col + template.width > cols) return null;
+    const blockKeys = [];
+    for (const [bx, by] of template.blocks) {
+      const key = `${row + by},${col + bx}`;
+      if (occupied.has(key)) return null;
+      blockKeys.push(key);
+    }
+    return blockKeys;
+  };
   
-  renderDotGrid(grid) {
-    // Store grid reference for scaling updates
-    this.currentGrid = grid;
-    
-    // Render a dot at each base grid cell position
-    this.updateDotGrid();
-    
-    // Also render squares
-    this.renderSquares(grid);
-  }
+  let iterations = 0;
+  const maxIterations = rows * cols * 10;
   
-  updateDotGrid() {
-    if (!this.currentGrid) return;
+  while (iterations < maxIterations) {
+    iterations++;
+    const empty = findEmptyCell();
+    if (!empty) break;
     
-    this.dotGridLayer.destroyChildren();
+    const { row, col } = empty;
+    let placed = false;
+    const shuffled = [...bentoShapes].sort(() => Math.random() - 0.3);
     
-    // Scale the grid cell size - this changes the spacing between dots
-    const scaledCellWidth = this.currentGrid.baseCellWidth * this.dotGridScale;
-    const scaledCellHeight = this.currentGrid.baseCellHeight * this.dotGridScale;
-    
-    // Calculate grid origin in screen coordinates
-    // Use the same grid offset as the cards, but in screen space
-    const gridOriginX = this.currentGrid.gridOffsetX + this.containerX;
-    const gridOriginY = this.currentGrid.gridOffsetY + this.containerY;
-    
-    // Calculate how many dots to show to cover the entire viewport
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    
-    // Find the starting grid position (may be negative)
-    const startCol = Math.floor((0 - gridOriginX) / scaledCellWidth);
-    const startRow = Math.floor((0 - gridOriginY) / scaledCellHeight);
-    
-    // Find the ending grid position
-    const endCol = Math.ceil((viewportWidth - gridOriginX) / scaledCellWidth);
-    const endRow = Math.ceil((viewportHeight - gridOriginY) / scaledCellHeight);
-    
-    // Draw dots across the entire viewport
-    for (let row = startRow; row <= endRow; row++) {
-      for (let col = startCol; col <= endCol; col++) {
-        const x = gridOriginX + (col + 0.5) * scaledCellWidth;
-        const y = gridOriginY + (row + 0.5) * scaledCellHeight;
+    for (const template of shuffled) {
+      const blockKeys = tryPlace(template, row, col);
+      if (blockKeys) {
+        blockKeys.forEach(k => occupied.add(k));
         
-        // Only draw if within viewport bounds
-        if (x >= 0 && x <= viewportWidth && y >= 0 && y <= viewportHeight) {
-          const dot = new Konva.Circle({
-            x: x,
-            y: y,
-            radius: 2,
-            fill: 'rgba(255, 255, 255, 0.6)',
-            stroke: 'rgba(255, 255, 255, 0.3)',
-            strokeWidth: 0.5,
-            listening: false,
-          });
-          this.dotGridLayer.add(dot);
-        }
+        // Position includes gap in grid calculation
+        const baseX = col * (cellSize + gap);
+        const baseY = row * (cellSize + gap);
+        const baseW = template.width * cellSize + (template.width - 1) * gap;
+        const baseH = template.height * cellSize + (template.height - 1) * gap;
+        
+        shapes.push({
+          id: shapes.length,
+          baseX, baseY, baseW, baseH,
+          x: baseX, y: baseY,
+          scale: 1,
+          color: PALETTE[shapes.length % PALETTE.length],
+          template
+        });
+        
+        placed = true;
+        break;
       }
     }
     
-    this.dotGridLayer.draw();
-  }
-  
-  setDotGridScale(scale) {
-    // Only update if user is not actively interacting with slider
-    if (typeof isUserInteractingWithSlider !== 'undefined' && isUserInteractingWithSlider) {
-      return; // Don't update if user is dragging
-    }
-    
-    this.dotGridScale = scale;
-    if (this.dotGridLayer.visible() && this.currentGrid) {
-      this.updateDotGrid();
-    }
-    // Regenerate and render squares when scale changes
-    if (this.currentGrid) {
-      // Use requestAnimationFrame to allow UI to update
-      requestAnimationFrame(() => {
-        this.renderSquares(this.currentGrid);
+    if (!placed) {
+      const key = `${row},${col}`;
+      occupied.add(key);
+      shapes.push({
+        id: shapes.length,
+        baseX: col * (cellSize + gap),
+        baseY: row * (cellSize + gap),
+        baseW: cellSize,
+        baseH: cellSize,
+        x: col * (cellSize + gap),
+        y: row * (cellSize + gap),
+        scale: 1,
+        color: PALETTE[shapes.length % PALETTE.length],
+        template: { name: '1x1', blocks: [[0,0]], width: 1, height: 1 }
       });
     }
   }
   
-  renderSquares(grid, shapes = null) {
-    // Generate Bento shapes if not provided (for regeneration)
-    // If shapes are provided, just re-render them (for gap changes)
-    if (shapes === null) {
-      shapes = grid.generateSquares(this.dotGridScale);
+  return shapes;
+}
+
+// Constraint solver: shockwave + magnetic pull
+function solveConstraints(shapes, hoveredId, hoverScale, gap) {
+  // Reset everything to base
+  shapes.forEach(s => {
+    s.targetX = s.baseX;
+    s.targetY = s.baseY;
+    s.targetScale = s.id === hoveredId ? hoverScale : 1;
+    s.pushX = 0;
+    s.pushY = 0;
+    s.wasPushed = false;
+    s.priority = undefined;
+    s.cornerCollapsed = false;
+  });
+  
+  if (hoveredId === null) return;
+  
+  const hovered = shapes.find(s => s.id === hoveredId);
+  if (!hovered) return;
+  
+  // How much hovered shape grows on each side
+  const growX = (hovered.baseW * (hoverScale - 1)) / 2;
+  const growY = (hovered.baseH * (hoverScale - 1)) / 2;
+  
+  const hCx = hovered.baseX + hovered.baseW / 2;
+  const hCy = hovered.baseY + hovered.baseH / 2;
+  const hL = hovered.baseX;
+  const hR = hovered.baseX + hovered.baseW;
+  const hT = hovered.baseY;
+  const hB = hovered.baseY + hovered.baseH;
+  
+  // Scaled bounds
+  const hsL = hCx - (hovered.baseW * hoverScale) / 2;
+  const hsR = hCx + (hovered.baseW * hoverScale) / 2;
+  const hsT = hCy - (hovered.baseH * hoverScale) / 2;
+  const hsB = hCy + (hovered.baseH * hoverScale) / 2;
+  
+  // Assign priority levels: hovered = 0 (highest), then 1, 2, 3... (lower priority = further out)
+  const hoveredShape = shapes.find(s => s.id === hoveredId);
+  hoveredShape.priority = 0; // Highest priority
+  
+  // PHASE 1: Assign priority levels based on distance from hovered shape
+  // Use BFS-like approach to assign priorities layer by layer
+  const assigned = new Set([hoveredId]);
+  let currentPriority = 1;
+  let currentLayer = [hoveredId];
+  
+  while (currentLayer.length > 0 && currentPriority < 100) {
+    const nextLayer = [];
+    
+    currentLayer.forEach(shapeId => {
+      const shape = shapes.find(s => s.id === shapeId);
+      if (!shape) return;
       
-      // Apply physics-based gap adjustment if gap spacing is set
-      // Shapes float freely after initial grid placement
-      if (this.gapSpacing > 0) {
-        shapes = grid.adjustGapsWithPhysics(shapes, this.gapSpacing, 80, 0.92); // More iterations, less damping for free floating
-      }
+      const sL = shape.baseX, sR = shape.baseX + shape.baseW;
+      const sT = shape.baseY, sB = shape.baseY + shape.baseH;
       
-      this.currentSquares = shapes;
+      shapes.forEach(neighbor => {
+        if (assigned.has(neighbor.id) || neighbor.id === hoveredId) return;
+        
+        const nL = neighbor.baseX, nR = neighbor.baseX + neighbor.baseW;
+        const nT = neighbor.baseY, nB = neighbor.baseY + neighbor.baseH;
+        
+        // Check if neighbor is adjacent (within gap distance)
+        const vOverlap = Math.min(sB, nB) - Math.max(sT, nT);
+        const hOverlap = Math.min(sR, nR) - Math.max(sL, nL);
+        const gapBetweenX = vOverlap > 0 ? (sL > nR ? sL - nR : nL - sR) : Infinity;
+        const gapBetweenY = hOverlap > 0 ? (sT > nB ? sT - nB : nT - sB) : Infinity;
+        
+        if ((vOverlap > 0 && gapBetweenX <= gap * 1.5) || 
+            (hOverlap > 0 && gapBetweenY <= gap * 1.5)) {
+          if (!assigned.has(neighbor.id)) {
+            neighbor.priority = currentPriority;
+            assigned.add(neighbor.id);
+            nextLayer.push(neighbor.id);
+          }
+        }
+      });
+    });
+    
+    currentLayer = nextLayer;
+    currentPriority++;
+  }
+  
+  // Assign remaining shapes a very low priority
+  shapes.forEach(s => {
+    if (s.priority === undefined) {
+      s.priority = 999;
+    }
+  });
+  
+  // PHASE 2: Push - direct neighbors of hovered shape move away
+  shapes.forEach(s => {
+    if (s.id === hoveredId) return;
+    
+    const sL = s.baseX, sR = s.baseX + s.baseW;
+    const sT = s.baseY, sB = s.baseY + s.baseH;
+    const sCx = s.baseX + s.baseW / 2;
+    const sCy = s.baseY + s.baseH / 2;
+    
+    const vOverlap = Math.min(hB, sB) - Math.max(hT, sT);
+    const hOverlap = Math.min(hR, sR) - Math.max(hL, sL);
+    
+    // Horizontal push
+    if (vOverlap > 0) {
+      if (sCx < hCx) { s.pushX = -growX; }
+      else { s.pushX = growX; }
+      s.wasPushed = true;
     }
     
-    // Clear existing shapes
-    this.squaresLayer.destroyChildren();
+    // Vertical push
+    if (hOverlap > 0) {
+      if (sCy < hCy) { s.pushY = -growY; }
+      else { s.pushY = growY; }
+      s.wasPushed = true;
+    }
     
-    // Color palette (avoiding red-ish hues)
-    const palette = [
-      '#22d3ee', '#38bdf8', '#60a5fa', '#3b82f6', '#2563eb',
-      '#34d399', '#10b981', '#14b8a6', '#06b6d4', '#0891b2',
-      '#0ea5e9', '#0284c7', '#0d9488', '#059669', '#2dd4bf', '#5eead4'
-    ];
+    // Corner forcefield
+    if (vOverlap <= 0 && hOverlap <= 0) {
+      const ffL = hsL - gap, ffR = hsR + gap;
+      const ffT = hsT - gap, ffB = hsB + gap;
+      const ffOverlapX = Math.min(ffR, sR) - Math.max(ffL, sL);
+      const ffOverlapY = Math.min(ffB, sB) - Math.max(ffT, sT);
+      
+      if (ffOverlapX > 0 && ffOverlapY > 0) {
+        s.pushX = sCx < hCx ? -growX : growX;
+        s.pushY = sCy < hCy ? -growY : growY;
+        s.wasPushed = true;
+      }
+    }
+  });
+  
+  // Apply initial push
+  shapes.forEach(s => {
+    s.targetX += s.pushX;
+    s.targetY += s.pushY;
+  });
+  
+  // PHASE 2.5: Corner collision collapse - make diagonal pushes unstable
+  // Deterministic coin flip based on shape ID to prevent jittering
+  shapes.forEach(s => {
+    if (s.id === hoveredId || !s.wasPushed) return;
     
-    // Render Bento shapes (rectangles and L-shapes)
-    shapes.forEach((shape, shapeIndex) => {
-      const shapeColor = palette[shapeIndex % palette.length];
+    // Check if this shape was pushed diagonally (both X and Y)
+    const wasDiagonalPush = Math.abs(s.pushX) > 0 && Math.abs(s.pushY) > 0;
+    if (!wasDiagonalPush) return;
+    
+    // Check if already collapsed (one direction much smaller than other)
+    const pushXRatio = Math.abs(s.pushX) / (Math.abs(s.pushX) + Math.abs(s.pushY) + 0.001);
+    const alreadyCollapsed = pushXRatio < 0.2 || pushXRatio > 0.8;
+    if (alreadyCollapsed) return; // Don't flip again if already committed
+    
+    // Deterministic coin flip based on shape ID and hovered ID (stable across frames)
+    const seed = (s.id * 17 + (hoveredId || 0) * 31) % 100;
+    const preferHorizontal = seed < 50;
+    
+    // FULLY commit - reduce other direction to near zero
+    const collapseStrength = 0.85;
+    if (preferHorizontal) {
+      s.targetY -= s.pushY * collapseStrength;
+      s.pushY *= (1 - collapseStrength);
+    } else {
+      s.targetX -= s.pushX * collapseStrength;
+      s.pushX *= (1 - collapseStrength);
+    }
+    
+    // Mark as corner-collapsed - gives it right of way to push other elements
+    s.cornerCollapsed = true;
+  });
+  
+  // PHASE 2.6: Corner-collapsed elements get right of way - push everything else away
+  // Corner-collapsed elements are visually important and deserve to consolidate into their niche
+  for (let pass = 0; pass < 10; pass++) {
+    let hasOverlaps = false;
+    
+    shapes.forEach(collapsed => {
+      if (!collapsed.cornerCollapsed || collapsed.id === hoveredId) return;
       
-      // Determine if shape is fully inside or straddling
-      const shapeRight = shape.x + shape.width;
-      const shapeBottom = shape.y + shape.height;
-      const isFullyInside = shape.x >= 0 && shapeRight <= this.containerWidth &&
-                           shape.y >= 0 && shapeBottom <= this.containerHeight;
+      const cL = collapsed.targetX, cR = collapsed.targetX + collapsed.baseW;
+      const cT = collapsed.targetY, cB = collapsed.targetY + collapsed.baseH;
       
-      // Use different opacity for inside vs straddling
-      const opacity = isFullyInside ? 0.85 : 0.6;
+      shapes.forEach(other => {
+        if (other.id === collapsed.id || other.id === hoveredId) return;
+        
+        const oL = other.targetX, oR = other.targetX + other.baseW;
+        const oT = other.targetY, oB = other.targetY + other.baseH;
+        
+        // Check for overlap or gap violation
+        const vOverlap = Math.min(cB, oB) - Math.max(cT, oT);
+        const hOverlap = Math.min(cR, oR) - Math.max(cL, oL);
+        
+        if (vOverlap > 0 && hOverlap > 0) {
+          // Actual overlap - push other away
+          hasOverlaps = true;
+          
+          const cCx = collapsed.targetX + collapsed.baseW / 2;
+          const cCy = collapsed.targetY + collapsed.baseH / 2;
+          const oCx = other.targetX + other.baseW / 2;
+          const oCy = other.targetY + other.baseH / 2;
+          
+          const dx = oCx - cCx;
+          const dy = oCy - cCy;
+          
+          const overlapX = Math.min(cR, oR) - Math.max(cL, oL);
+          const overlapY = Math.min(cB, oB) - Math.max(cT, oT);
+          
+          // Push other away to maintain gap
+          const sepX = overlapX + gap;
+          const sepY = overlapY + gap;
+          
+          if (Math.abs(dx) > Math.abs(dy)) {
+            if (dx > 0) {
+              other.targetX += sepX;
+            } else {
+              other.targetX -= sepX;
+            }
+          } else {
+            if (dy > 0) {
+              other.targetY += sepY;
+            } else {
+              other.targetY -= sepY;
+            }
+          }
+        } else if (vOverlap > 0 || hOverlap > 0) {
+          // Check gap violation (too close)
+          const gapX = vOverlap > 0 ? (cL > oR ? cL - oR : oL - cR) : -1;
+          const gapY = hOverlap > 0 ? (cT > oB ? cT - oB : oT - cB) : -1;
+          
+          if ((vOverlap > 0 && gapX < gap) || (hOverlap > 0 && gapY < gap)) {
+            hasOverlaps = true;
+            
+            const cCx = collapsed.targetX + collapsed.baseW / 2;
+            const cCy = collapsed.targetY + collapsed.baseH / 2;
+            const oCx = other.targetX + other.baseW / 2;
+            const oCy = other.targetY + other.baseH / 2;
+            
+            const dx = oCx - cCx;
+            const dy = oCy - cCy;
+            
+            let sepX = 0, sepY = 0;
+            if (vOverlap > 0 && gapX < gap) {
+              sepX = gap - gapX;
+            }
+            if (hOverlap > 0 && gapY < gap) {
+              sepY = gap - gapY;
+            }
+            
+            if (Math.abs(dx) > Math.abs(dy) && sepX > 0) {
+              if (dx > 0) {
+                other.targetX += sepX;
+              } else {
+                other.targetX -= sepX;
+              }
+            } else if (sepY > 0) {
+              if (dy > 0) {
+                other.targetY += sepY;
+              } else {
+                other.targetY -= sepY;
+              }
+            }
+          }
+        }
+      });
+    });
+    
+    if (!hasOverlaps) break;
+  }
+  
+  // PHASE 3: Cascading push - pushed shapes push their neighbors
+  // No decay - all shapes get the same push amount
+  // IMPORTANT: Only cascade to shapes that are within 1 priority level
+  // This prevents long chains that pull in unrelated shapes
+  for (let pass = 0; pass < 10; pass++) {
+    shapes.forEach(puller => {
+      if (!puller.wasPushed && puller.id !== hoveredId) return;
+      if (puller.id === hoveredId) return;
       
-      // Apply gap spacing to the entire shape (not individual blocks)
-      // Shapes are independent elements, gaps go between shapes, not within shapes
-      const gap = this.gapSpacing;
-      const shapeOffsetX = gap / 2;
-      const shapeOffsetY = gap / 2;
-      const shapeWidthReduction = gap;
-      const shapeHeightReduction = gap;
+      // Use ORIGINAL positions to check adjacency (prevents false neighbors)
+      const pL = puller.baseX, pR = puller.baseX + puller.baseW;
+      const pT = puller.baseY, pB = puller.baseY + puller.baseH;
+      const pCx = puller.baseX + puller.baseW / 2;
+      const pCy = puller.baseY + puller.baseH / 2;
       
-      // Render rectangular shapes as a single rect
-      if (shape.isRectangular) {
-        const x = shape.x + this.containerX + shapeOffsetX;
-        const y = shape.y + this.containerY + shapeOffsetY;
+      shapes.forEach(target => {
+        if (target.wasPushed || target.id === hoveredId || target.id === puller.id) return;
         
-        const rect = new Konva.Rect({
-          x: x,
-          y: y,
-          width: shape.width - shapeWidthReduction,
-          height: shape.height - shapeHeightReduction,
-          fill: shapeColor,
-          opacity: opacity,
-          cornerRadius: 4,
-          stroke: 'white',
-          strokeWidth: 2,
-          strokeAlign: 'inside',
-          shadowBlur: 4,
-          shadowColor: 'rgba(0, 0, 0, 0.3)',
-          shadowOffset: { x: 1, y: 1 },
-          listening: false,
-        });
+        // CRITICAL: Only cascade to shapes that are within 1 priority level
+        // This prevents long chains that pull in shapes far from the hovered element
+        if (target.priority > puller.priority + 1) return;
         
-        this.squaresLayer.add(rect);
-      } else {
-        // Render L-shapes: blocks stay together as one unit, gap applied to outer perimeter only
-        // Calculate the shape's bounding box
-        const minBlockX = Math.min(...shape.blocks.map(b => b.x));
-        const minBlockY = Math.min(...shape.blocks.map(b => b.y));
-        const maxBlockX = Math.max(...shape.blocks.map(b => b.x + b.width));
-        const maxBlockY = Math.max(...shape.blocks.map(b => b.y + b.height));
+        // Use ORIGINAL positions to check adjacency
+        const tL = target.baseX, tR = target.baseX + target.baseW;
+        const tT = target.baseY, tB = target.baseY + target.baseH;
+        const tCx = target.baseX + target.baseW / 2;
+        const tCy = target.baseY + target.baseH / 2;
         
-        const originalWidth = maxBlockX - minBlockX;
-        const originalHeight = maxBlockY - minBlockY;
+        // Check if target was originally adjacent to puller (within reasonable distance)
+        const vOverlap = Math.min(pB, tB) - Math.max(pT, tT);
+        const hOverlap = Math.min(pR, tR) - Math.max(pL, tL);
         
-        // Apply gap to the entire shape bounding box (not individual blocks)
-        const shapeX = minBlockX + this.containerX + shapeOffsetX;
-        const shapeY = minBlockY + this.containerY + shapeOffsetY;
-        const shapeWidth = originalWidth - shapeWidthReduction;
-        const shapeHeight = originalHeight - shapeHeightReduction;
-        
-        // Scale factors to shrink the entire shape uniformly
-        const scaleX = shapeWidth / originalWidth;
-        const scaleY = shapeHeight / originalHeight;
-        
-        // Render each block, scaled uniformly to maintain shape structure
-        shape.blocks.forEach((block) => {
-          // Calculate block position relative to shape origin
-          const relX = block.x - minBlockX;
-          const relY = block.y - minBlockY;
-          
-          // Apply uniform scaling to maintain block relationships
-          const x = shapeX + relX * scaleX;
-          const y = shapeY + relY * scaleY;
-          const width = block.width * scaleX;
-          const height = block.height * scaleY;
-          
-          const rect = new Konva.Rect({
-            x: x,
-            y: y,
-            width: width,
-            height: height,
-            fill: shapeColor,
-            opacity: opacity,
-            cornerRadius: 2,
-            shadowBlur: 4,
-            shadowColor: 'rgba(0, 0, 0, 0.3)',
-            shadowOffset: { x: 1, y: 1 },
-            listening: false,
-          });
-          
-          this.squaresLayer.add(rect);
-        });
-        
-        // Add outline around the entire L-shape - trace the actual perimeter
-        // Draw outline by checking which edges are on the perimeter
-        shape.blocks.forEach((block) => {
-          const relX = block.x - minBlockX;
-          const relY = block.y - minBlockY;
-          // Apply same scaling as blocks
-          const blockX = shapeX + relX * scaleX;
-          const blockY = shapeY + relY * scaleY;
-          const blockW = block.width * scaleX;
-          const blockH = block.height * scaleY;
-          
-          // Check which edges are on the perimeter by checking if adjacent blocks exist
-          const checkBlock = (dx, dy) => {
-            const checkX = block.x + dx * block.width;
-            const checkY = block.y + dy * block.height;
-            return shape.blocks.some(b => 
-              Math.abs(b.x - checkX) < 1 && Math.abs(b.y - checkY) < 1
-            );
-          };
-          
-          // Draw only perimeter edges with inner stroke
-          // Offset by half stroke width to make it inner
-          const strokeOffset = 1; // Half of strokeWidth (2)
-          
-          if (!checkBlock(0, -1)) { // Top edge
-            const line = new Konva.Line({
-              points: [blockX + strokeOffset, blockY + strokeOffset, blockX + blockW - strokeOffset, blockY + strokeOffset],
-              stroke: 'white',
-              strokeWidth: 2,
-              lineCap: 'round',
-              listening: false,
-            });
-            this.squaresLayer.add(line);
+        // Horizontal adjacency - check gap distance
+        if (vOverlap > 0) {
+          const gapBetween = pL > tR ? pL - tR : tL - pR;
+          if (gapBetween >= 0 && gapBetween <= gap * 2) {
+            const pushAmount = tCx < pCx ? -gap : gap;
+            target.targetX += pushAmount;
+            target.wasPushed = true;
+            target.pushX = pushAmount;
           }
-          if (!checkBlock(1, 0)) { // Right edge
-            const line = new Konva.Line({
-              points: [blockX + blockW - strokeOffset, blockY + strokeOffset, blockX + blockW - strokeOffset, blockY + blockH - strokeOffset],
-              stroke: 'white',
-              strokeWidth: 2,
-              lineCap: 'round',
-              listening: false,
-            });
-            this.squaresLayer.add(line);
+        }
+        
+        // Vertical adjacency
+        if (hOverlap > 0) {
+          const gapBetween = pT > tB ? pT - tB : tT - pB;
+          if (gapBetween >= 0 && gapBetween <= gap * 2) {
+            const pushAmount = tCy < pCy ? -gap : gap;
+            target.targetY += pushAmount;
+            target.wasPushed = true;
+            target.pushY = pushAmount;
           }
-          if (!checkBlock(0, 1)) { // Bottom edge
-            const line = new Konva.Line({
-              points: [blockX + blockW - strokeOffset, blockY + blockH - strokeOffset, blockX + strokeOffset, blockY + blockH - strokeOffset],
-              stroke: 'white',
-              strokeWidth: 2,
-              lineCap: 'round',
-              listening: false,
-            });
-            this.squaresLayer.add(line);
+        }
+      });
+    });
+  }
+  
+  // PHASE 4: Priority-based gap enforcement
+  // Higher priority shapes (lower number) push lower priority shapes (higher number)
+  // Gap distance is enforced at all costs - no shapes can be closer than gap distance
+  // BUT: Only enforce gaps between shapes that were originally neighbors
+  // Track total movement to prevent excessive dragging
+  shapes.forEach(s => {
+    s.totalGapEnforcementX = 0;
+    s.totalGapEnforcementY = 0;
+  });
+  
+  for (let pass = 0; pass < 15; pass++) {
+    let hasViolations = false;
+    
+    shapes.forEach(higherPriority => {
+      if (higherPriority.id === hoveredId) return;
+      
+      const hL = higherPriority.targetX, hR = higherPriority.targetX + higherPriority.baseW;
+      const hT = higherPriority.targetY, hB = higherPriority.targetY + higherPriority.baseH;
+      
+      // Original positions to check if they were neighbors
+      const hLBase = higherPriority.baseX, hRBase = higherPriority.baseX + higherPriority.baseW;
+      const hTBase = higherPriority.baseY, hBBase = higherPriority.baseY + higherPriority.baseH;
+      
+      shapes.forEach(lowerPriority => {
+        // Only resolve if higherPriority has lower priority number (higher priority)
+        if (lowerPriority.id === hoveredId || 
+            lowerPriority.id === higherPriority.id ||
+            higherPriority.priority >= lowerPriority.priority) return;
+        
+        // Check if these shapes were originally neighbors
+        const lLBase = lowerPriority.baseX, lRBase = lowerPriority.baseX + lowerPriority.baseW;
+        const lTBase = lowerPriority.baseY, lBBase = lowerPriority.baseY + lowerPriority.baseH;
+        
+        const vOverlapBase = Math.min(hBBase, lBBase) - Math.max(hTBase, lTBase);
+        const hOverlapBase = Math.min(hRBase, lRBase) - Math.max(hLBase, lLBase);
+        const gapBetweenXBase = vOverlapBase > 0 ? (hLBase > lRBase ? hLBase - lRBase : lLBase - hRBase) : Infinity;
+        const gapBetweenYBase = hOverlapBase > 0 ? (hTBase > lBBase ? hTBase - lBBase : lTBase - hBBase) : Infinity;
+        
+        // ONLY enforce gap if they were originally neighbors (within gap*2)
+        // This prevents "drag" effects between unrelated shapes in the cascade
+        const wereNeighbors = (vOverlapBase > 0 && gapBetweenXBase <= gap * 2) || 
+                              (hOverlapBase > 0 && gapBetweenYBase <= gap * 2);
+        
+        if (!wereNeighbors) return; // Skip if not originally neighbors
+        
+        const lL = lowerPriority.targetX, lR = lowerPriority.targetX + lowerPriority.baseW;
+        const lT = lowerPriority.targetY, lB = lowerPriority.targetY + lowerPriority.baseH;
+        
+        // Check vertical overlap (for horizontal gap enforcement)
+        const vOverlap = Math.min(hB, lB) - Math.max(hT, lT);
+        // Check horizontal overlap (for vertical gap enforcement)
+        const hOverlap = Math.min(hR, lR) - Math.max(hL, lL);
+        
+        // Calculate actual distances
+        const gapX = vOverlap > 0 ? (hL > lR ? hL - lR : lL - hR) : -1;
+        const gapY = hOverlap > 0 ? (hT > lB ? hT - lB : lT - hB) : -1;
+        
+        // Check if gap is violated (too close or overlapping)
+        const gapViolatedX = vOverlap > 0 && gapX < gap;
+        const gapViolatedY = hOverlap > 0 && gapY < gap;
+        
+        if (gapViolatedX || gapViolatedY) {
+          hasViolations = true;
+          
+          const hCx = higherPriority.targetX + higherPriority.baseW / 2;
+          const hCy = higherPriority.targetY + higherPriority.baseH / 2;
+          const lCx = lowerPriority.targetX + lowerPriority.baseW / 2;
+          const lCy = lowerPriority.targetY + lowerPriority.baseH / 2;
+          
+          const dx = lCx - hCx;
+          const dy = lCy - hCy;
+          
+          // Calculate separation needed to enforce gap
+          let sepX = 0, sepY = 0;
+          
+          if (gapViolatedX) {
+            // Need to separate horizontally to maintain gap
+            const currentGap = gapX < 0 ? 0 : gapX;
+            sepX = gap - currentGap;
           }
-          if (!checkBlock(-1, 0)) { // Left edge
-            const line = new Konva.Line({
-              points: [blockX + strokeOffset, blockY + blockH - strokeOffset, blockX + strokeOffset, blockY + strokeOffset],
-              stroke: 'white',
-              strokeWidth: 2,
-              lineCap: 'round',
-              listening: false,
-            });
-            this.squaresLayer.add(line);
+          
+          if (gapViolatedY) {
+            // Need to separate vertically to maintain gap
+            const currentGap = gapY < 0 ? 0 : gapY;
+            sepY = gap - currentGap;
           }
-        });
+          
+          // Corner collision: if both X and Y separation needed, make it unstable
+          // Deterministic coin flip to prevent jittering
+          if (sepX > 0 && sepY > 0) {
+            // Check if already collapsed
+            const sepRatio = Math.abs(sepX) / (Math.abs(sepX) + Math.abs(sepY) + 0.001);
+            const alreadyCollapsed = sepRatio < 0.2 || sepRatio > 0.8;
+            if (!alreadyCollapsed) {
+              // Deterministic coin flip based on shape IDs
+              const seed = (lowerPriority.id * 17 + higherPriority.id * 31) % 100;
+              const preferHorizontal = seed < 50;
+              const collapseFactor = 0.85;
+              if (preferHorizontal) {
+                sepY *= (1 - collapseFactor);
+              } else {
+                sepX *= (1 - collapseFactor);
+              }
+            }
+          }
+          
+          // Push lower priority shape away to enforce gap
+          // But limit total movement to prevent excessive dragging (max 2x gap)
+          if (Math.abs(dx) > Math.abs(dy) && sepX > 0) {
+            const maxMoveX = gap * 2 - Math.abs(lowerPriority.totalGapEnforcementX || 0);
+            const actualSepX = Math.min(sepX, maxMoveX);
+            if (actualSepX > 0) {
+              if (dx > 0) {
+                lowerPriority.targetX += actualSepX;
+                lowerPriority.totalGapEnforcementX = (lowerPriority.totalGapEnforcementX || 0) + actualSepX;
+              } else {
+                lowerPriority.targetX -= actualSepX;
+                lowerPriority.totalGapEnforcementX = (lowerPriority.totalGapEnforcementX || 0) - actualSepX;
+              }
+            }
+          } else if (sepY > 0) {
+            const maxMoveY = gap * 2 - Math.abs(lowerPriority.totalGapEnforcementY || 0);
+            const actualSepY = Math.min(sepY, maxMoveY);
+            if (actualSepY > 0) {
+              if (dy > 0) {
+                lowerPriority.targetY += actualSepY;
+                lowerPriority.totalGapEnforcementY = (lowerPriority.totalGapEnforcementY || 0) + actualSepY;
+              } else {
+                lowerPriority.targetY -= actualSepY;
+                lowerPriority.totalGapEnforcementY = (lowerPriority.totalGapEnforcementY || 0) - actualSepY;
+              }
+            }
+          }
+        }
+      });
+    });
+    
+    // Also check gap violations with hovered shape (highest priority)
+    shapes.forEach(shape => {
+      if (shape.id === hoveredId) return;
+      
+      const sL = shape.targetX, sR = shape.targetX + shape.baseW;
+      const sT = shape.targetY, sB = shape.targetY + shape.baseH;
+      
+      // Check vertical overlap (for horizontal gap enforcement)
+      const vOverlap = Math.min(hsB, sB) - Math.max(hsT, sT);
+      // Check horizontal overlap (for vertical gap enforcement)
+      const hOverlap = Math.min(hsR, sR) - Math.max(hsL, sL);
+      
+      // Calculate actual distances
+      const gapX = vOverlap > 0 ? (hsL > sR ? hsL - sR : sL - hsR) : -1;
+      const gapY = hOverlap > 0 ? (hsT > sB ? hsT - sB : sT - hsB) : -1;
+      
+      // Check if gap is violated (too close or overlapping)
+      const gapViolatedX = vOverlap > 0 && gapX < gap;
+      const gapViolatedY = hOverlap > 0 && gapY < gap;
+      
+      if (gapViolatedX || gapViolatedY) {
+        hasViolations = true;
+        
+        const sCx = shape.targetX + shape.baseW / 2;
+        const sCy = shape.targetY + shape.baseH / 2;
+        const dx = sCx - hCx;
+        const dy = sCy - hCy;
+        
+        // Calculate separation needed to enforce gap
+        let sepX = 0, sepY = 0;
+        
+        if (gapViolatedX) {
+          const currentGap = gapX < 0 ? 0 : gapX;
+          sepX = gap - currentGap;
+        }
+        
+        if (gapViolatedY) {
+          const currentGap = gapY < 0 ? 0 : gapY;
+          sepY = gap - currentGap;
+        }
+        
+        // Push shape away from hovered to enforce gap
+        if (Math.abs(dx) > Math.abs(dy) && sepX > 0) {
+          if (dx > 0) {
+            shape.targetX += sepX;
+          } else {
+            shape.targetX -= sepX;
+          }
+        } else if (sepY > 0) {
+          if (dy > 0) {
+            shape.targetY += sepY;
+          } else {
+            shape.targetY -= sepY;
+          }
+        }
       }
     });
     
-    this.squaresLayer.draw();
-  }
-  
-  toggleDotGrid() {
-    const isVisible = this.dotGridLayer.visible();
-    this.dotGridLayer.visible(!isVisible);
-    this.dotGridLayer.draw();
-    return !isVisible;
-  }
-  
-  toggleDebug() {
-    this.debugLayer.visible(!this.debugLayer.visible());
-    this.debugLayer.draw();
-  }
-  
-  resize(containerWidth, containerHeight) {
-    this.stage.width(window.innerWidth);
-    this.stage.height(window.innerHeight);
-    this.containerWidth = containerWidth;
-    this.containerHeight = containerHeight;
-    this.updateContainerPosition();
-    this.updateMask();
-    // Regenerate squares if grid exists
-    if (this.currentGrid) {
-      this.renderSquares(this.currentGrid);
-    }
+    if (!hasViolations) break;
   }
 }
 
 // Main application
-let grid;
-let renderer;
-
-function getContainerSize() {
-  const container = document.getElementById('container');
-  return {
-    width: container.clientWidth,
-    height: container.clientHeight
-  };
-}
-
-function init() {
-  const { width, height } = getContainerSize();
-  
-  grid = new ElasticBentoGrid(width, height);
-  renderer = new BentoRenderer('canvas-container', width, height);
-  
-  generate();
-}
-
-function generate() {
-  // Don't interfere with slider if user is interacting
-  if (typeof isUserInteractingWithSlider !== 'undefined' && isUserInteractingWithSlider) {
-    return;
+class BentoGrid {
+  constructor(containerId) {
+    this.container = document.getElementById(containerId);
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.container.appendChild(this.canvas);
+    
+    this.gridScale = 1;
+    this.gap = 8;
+    this.hoverScale = 1.08;
+    this.shapes = [];
+    this.hoveredId = null;
+    this.animId = null;
+    this.canvasOffsetX = 0;
+    this.canvasOffsetY = 0;
+    
+    this.updateDimensions();
+    this.setupEventListeners();
+    this.regenerate();
+    this.startAnimation();
   }
   
-  const { width, height } = getContainerSize();
-  grid = new ElasticBentoGrid(width, height);
-  renderer.renderGrid(grid);
-  renderer.renderDotGrid(grid);
+  updateDimensions() {
+    const rect = this.container.getBoundingClientRect();
+    this.width = rect.width;
+    this.height = rect.height;
+    
+    // Add padding around canvas so shapes can extend outside container
+    const padding = 200;
+    this.canvas.width = this.width + padding * 2;
+    this.canvas.height = this.height + padding * 2;
+    
+    // Store offset for coordinate translation
+    this.canvasOffsetX = padding;
+    this.canvasOffsetY = padding;
+    
+    // Position canvas to center it in container
+    this.canvas.style.position = 'absolute';
+    this.canvas.style.left = `-${padding}px`;
+    this.canvas.style.top = `-${padding}px`;
+  }
+  
+  setupEventListeners() {
+    window.addEventListener('resize', () => {
+      this.updateDimensions();
+      this.regenerate();
+    });
+    
+    this.canvas.addEventListener('mousemove', (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      // Account for canvas offset (padding)
+      const mx = e.clientX - rect.left - (this.canvasOffsetX || 0);
+      const my = e.clientY - rect.top - (this.canvasOffsetY || 0);
+      
+      let found = null;
+      for (let i = this.shapes.length - 1; i >= 0; i--) {
+        const s = this.shapes[i];
+        const cx = s.x + s.baseW / 2;
+        const cy = s.y + s.baseH / 2;
+        const w = s.baseW * s.scale;
+        const h = s.baseH * s.scale;
+        if (mx >= cx - w/2 && mx <= cx + w/2 && my >= cy - h/2 && my <= cy + h/2) {
+          found = s.id;
+          break;
+        }
+      }
+      this.hoveredId = found;
+    });
+    
+    this.canvas.addEventListener('mouseleave', () => {
+      this.hoveredId = null;
+    });
+  }
+  
+  regenerate() {
+    this.shapes = generateGrid(this.width, this.height, this.gridScale, this.gap);
+    // Initialize target positions
+    this.shapes.forEach(s => {
+      s.targetX = s.baseX;
+      s.targetY = s.baseY;
+      s.targetScale = 1;
+    });
+  }
+  
+  startAnimation() {
+    const lerpSpeed = 0.18;
+    
+    const tick = () => {
+      // Solve constraints to find target positions
+      solveConstraints(this.shapes, this.hoveredId, this.hoverScale, this.gap);
+      
+      // Smooth lerp to targets
+      this.shapes.forEach(s => {
+        s.x += (s.targetX - s.x) * lerpSpeed;
+        s.y += (s.targetY - s.y) * lerpSpeed;
+        s.scale += (s.targetScale - s.scale) * lerpSpeed;
+      });
+      
+      // Render
+      this.render();
+      
+      this.animId = requestAnimationFrame(tick);
+    };
+    
+    tick();
+  }
+  
+  render() {
+    // Clear entire canvas (including padding area)
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    
+    // Translate coordinate system to account for padding
+    this.ctx.save();
+    this.ctx.translate(this.canvasOffsetX, this.canvasOffsetY);
+    
+    this.shapes.forEach(s => {
+      const cx = s.x + s.baseW / 2;
+      const cy = s.y + s.baseH / 2;
+      const w = s.baseW * s.scale;
+      const h = s.baseH * s.scale;
+      const rx = cx - w / 2;
+      const ry = cy - h / 2;
+      const radius = 6;
+      
+      // Check if shape is outside container boundaries
+      const isOutside = rx < 0 || ry < 0 || rx + w > this.width || ry + h > this.height;
+      
+      this.ctx.fillStyle = s.id === this.hoveredId ? '#ef4444' : s.color;
+      
+      if (isOutside) {
+        this.ctx.globalAlpha = 0.5;
+        this.ctx.globalCompositeOperation = 'multiply';
+      } else {
+        this.ctx.globalAlpha = 0.9;
+        this.ctx.globalCompositeOperation = 'source-over';
+      }
+      
+      this.ctx.beginPath();
+      
+      // Draw rounded rectangle (polyfill for roundRect)
+      this.ctx.moveTo(rx + radius, ry);
+      this.ctx.lineTo(rx + w - radius, ry);
+      this.ctx.quadraticCurveTo(rx + w, ry, rx + w, ry + radius);
+      this.ctx.lineTo(rx + w, ry + h - radius);
+      this.ctx.quadraticCurveTo(rx + w, ry + h, rx + w - radius, ry + h);
+      this.ctx.lineTo(rx + radius, ry + h);
+      this.ctx.quadraticCurveTo(rx, ry + h, rx, ry + h - radius);
+      this.ctx.lineTo(rx, ry + radius);
+      this.ctx.quadraticCurveTo(rx, ry, rx + radius, ry);
+      this.ctx.closePath();
+      
+      this.ctx.fill();
+      
+      this.ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      this.ctx.lineWidth = 2;
+      this.ctx.stroke();
+    });
+    
+    // Restore coordinate system
+    this.ctx.restore();
+    
+    // Reset to defaults
+    this.ctx.globalAlpha = 1;
+    this.ctx.globalCompositeOperation = 'source-over';
+  }
+  
+  getShapeCount() {
+    return this.shapes.length;
+  }
+  
+  getCellSize() {
+    return 50 * this.gridScale;
+  }
+  
+  setGridScale(scale) {
+    this.gridScale = scale;
+    this.regenerate();
+  }
+  
+  setGap(gap) {
+    this.gap = gap;
+    this.regenerate();
+  }
+  
+  setHoverScale(scale) {
+    this.hoverScale = scale;
+  }
+}
+
+// Update metrics display
+function updateMetrics() {
+  if (!bentoGrid) return;
+  
+  const metricsEl = document.getElementById('metrics');
+  if (metricsEl) {
+    metricsEl.innerHTML = `
+      <div>Shapes</div><div>${bentoGrid.getShapeCount()}</div>
+      <div>Cell Size</div><div>${bentoGrid.getCellSize().toFixed(0)}px</div>
+      <div>Gap</div><div>${bentoGrid.gap}px</div>
+    `;
+  }
+}
+
+// Initialize
+let bentoGrid;
+let gridScaleSlider, gapSlider, hoverScaleSlider;
+let gridScaleValue, gapValue, hoverScaleValue;
+
+function init() {
+  bentoGrid = new BentoGrid('container');
+  
+  // Setup sliders
+  gridScaleSlider = document.getElementById('gridScale');
+  gridScaleValue = document.getElementById('gridScaleValue');
+  gapSlider = document.getElementById('gap');
+  gapValue = document.getElementById('gapValue');
+  hoverScaleSlider = document.getElementById('hoverScale');
+  hoverScaleValue = document.getElementById('hoverScaleValue');
+  
+  gridScaleSlider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    gridScaleValue.textContent = val.toFixed(1);
+    bentoGrid.setGridScale(val);
+    updateMetrics();
+  });
+  
+  gapSlider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    gapValue.textContent = val;
+    bentoGrid.setGap(val);
+    updateMetrics();
+  });
+  
+  hoverScaleSlider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    hoverScaleValue.textContent = val.toFixed(2) + 'x';
+    bentoGrid.setHoverScale(val);
+  });
+  
+  document.getElementById('regen').addEventListener('click', () => {
+    bentoGrid.regenerate();
+    updateMetrics();
+  });
+  
+  // Initial metrics update
   updateMetrics();
 }
 
-function updateMetrics() {
-  // Don't update metrics if user is interacting with slider
-  if (typeof isUserInteractingWithSlider !== 'undefined' && isUserInteractingWithSlider) {
-    return;
-  }
-  
-  const { width, height } = getContainerSize();
-  const metrics = grid.getMetrics(width, height);
-  const metricsEl = document.getElementById('metrics');
-  metricsEl.innerHTML = `
-    <div>Container</div><div>${metrics.containerSize}</div>
-    <div>Base Grid</div><div>${metrics.baseGrid} cells</div>
-    <div>Cell Size</div><div>${metrics.cellSize}</div>
-    <div>Grid Area</div><div>${metrics.gridArea}</div>
-  `;
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
 }
-
-// Handle resize - but don't interfere with slider interaction
-let resizeTimeout;
-window.addEventListener('resize', () => {
-  // Don't resize if user is actively interacting with slider
-  if (typeof isUserInteractingWithSlider !== 'undefined' && isUserInteractingWithSlider) {
-    return;
-  }
-  
-  clearTimeout(resizeTimeout);
-  resizeTimeout = setTimeout(() => {
-    const { width, height } = getContainerSize();
-    grid = new ElasticBentoGrid(width, height);
-    renderer.resize(width, height);
-    renderer.renderGrid(grid);
-    renderer.renderDotGrid(grid);
-    updateMetrics();
-  }, 150);
-});
-
-// Regenerate button with loading indicator
-document.getElementById('regen').addEventListener('click', () => {
-  loadingIndicator.style.visibility = 'visible';
-  // Use setTimeout to allow UI to update before heavy computation
-  setTimeout(() => {
-    generate();
-    loadingIndicator.style.visibility = 'hidden';
-  }, 10);
-});
-
-// Toggle dot grid button
-document.getElementById('toggleDotGrid').addEventListener('click', () => {
-  const isVisible = renderer.toggleDotGrid();
-  document.getElementById('toggleDotGrid').textContent = isVisible ? 'Hide Dot Grid' : 'Show Dot Grid';
-});
-
-// Dot grid scale slider with debouncing and isolation
-const dotGridScaleSlider = document.getElementById('dotGridScale');
-const dotGridScaleValue = document.getElementById('dotGridScaleValue');
-const loadingIndicator = document.getElementById('loadingIndicator');
-
-let scaleUpdateTimeout = null;
-let isUserInteractingWithSlider = false; // Track user interaction
-
-// Prevent any programmatic updates while user is interacting
-dotGridScaleSlider.addEventListener('mousedown', () => {
-  isUserInteractingWithSlider = true;
-});
-
-dotGridScaleSlider.addEventListener('touchstart', () => {
-  isUserInteractingWithSlider = true;
-});
-
-dotGridScaleSlider.addEventListener('input', (e) => {
-  // Stop event propagation to prevent any canvas interference
-  e.stopPropagation();
-  
-  const scale = parseFloat(e.target.value);
-  dotGridScaleValue.textContent = scale.toFixed(1);
-  
-  // Show loading indicator using visibility (doesn't affect layout)
-  loadingIndicator.style.visibility = 'visible';
-  
-  // Clear previous timeout
-  if (scaleUpdateTimeout) {
-    clearTimeout(scaleUpdateTimeout);
-  }
-  
-  // Debounce: wait 300ms after user stops sliding before regenerating
-  scaleUpdateTimeout = setTimeout(() => {
-    renderer.setDotGridScale(scale);
-    loadingIndicator.style.visibility = 'hidden';
-  }, 300);
-});
-
-// Reset interaction flag when user releases
-dotGridScaleSlider.addEventListener('mouseup', () => {
-  isUserInteractingWithSlider = false;
-});
-
-dotGridScaleSlider.addEventListener('touchend', () => {
-  isUserInteractingWithSlider = false;
-});
-
-// Also reset on mouse leave (in case user drags outside)
-dotGridScaleSlider.addEventListener('mouseleave', () => {
-  isUserInteractingWithSlider = false;
-});
-
-// Gap spacing slider
-const gapSpacingSlider = document.getElementById('gapSpacing');
-const gapSpacingValue = document.getElementById('gapSpacingValue');
-
-let gapUpdateTimeout = null;
-let lastGapValue = -1; // Initialize to -1 to force first regeneration
-
-gapSpacingSlider.addEventListener('input', (e) => {
-  e.stopPropagation();
-  
-  const gap = parseFloat(e.target.value);
-  gapSpacingValue.textContent = gap.toFixed(1);
-  
-  // Clear previous timeout
-  if (gapUpdateTimeout) {
-    clearTimeout(gapUpdateTimeout);
-  }
-  
-  // Debounce physics simulation (it's computationally intensive)
-  gapUpdateTimeout = setTimeout(() => {
-    if (renderer && renderer.currentGrid) {
-      // Always regenerate when gap value changes (increases or decreases)
-      // This ensures physics is applied correctly for any gap value
-      if (Math.abs(gap - lastGapValue) > 0.05) { // Regenerate if gap changed by more than 0.05
-        renderer.gapSpacing = gap;
-        renderer.renderSquares(renderer.currentGrid);
-        lastGapValue = gap;
-      }
-    }
-  }, 200);
-});
-
-// Toggle debug view (optional)
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'd' || e.key === 'D') {
-    renderer.toggleDebug();
-  }
-});
-
-// Initialize
-init();
