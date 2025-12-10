@@ -15,7 +15,7 @@ html, body {
   width: 75vw;
   height: 75vh;
   margin: 12.5vh auto;
-  border: 3px solid red;
+  border: 1px solid rgba(59, 130, 246, 0.4);
   border-radius: 8px;
   box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2), 
               0 8px 32px rgba(0, 0, 0, 0.3);
