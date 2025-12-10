@@ -38,8 +38,10 @@ class Cell {
     this.right = rightEdge;
     this.color = PALETTE[id % PALETTE.length];
 
-    // Corner cuts: { tl, tr, bl, br } - each is a cut size ratio (0-0.5)
+    // Corner cuts: { tl, tr, bl, br } - each is 0 or 0.5 (ratio of dimension)
     this.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
+    // Which dimension the cut is based on: 'width' or 'height'
+    this.cutDimension = null;
   }
 
   get x() { return this.left.pos; }
@@ -64,14 +66,22 @@ class Cell {
 
     const vertices = [];
 
-    // cuts.XX contains the actual pixel offset for the diagonal cut
-    // Scale cut proportionally when cell is resized from rest state
-    const scaleX = w / (this.right.rest - this.left.rest) || 1;
-    const scaleY = h / (this.bottom.rest - this.top.rest) || 1;
+    // Calculate cut size based on the dimension that was used for the diagonal
+    // 'width' means vertical neighbors (shared horizontal edge) - cut is w/2
+    // 'height' means horizontal neighbors (shared vertical edge) - cut is h/2
+    const getCut = (ratio) => {
+      if (ratio <= 0) return 0;
+      if (this.cutDimension === 'width') {
+        return ratio * w;
+      } else if (this.cutDimension === 'height') {
+        return ratio * h;
+      }
+      return ratio * Math.min(w, h); // fallback
+    };
 
     // Top-left corner
     if (this.cuts.tl > 0) {
-      const cut = this.cuts.tl * Math.min(scaleX, scaleY);
+      const cut = getCut(this.cuts.tl);
       vertices.push({ x: l + cut, y: t });
     } else {
       vertices.push({ x: l, y: t });
@@ -79,7 +89,7 @@ class Cell {
 
     // Top-right corner
     if (this.cuts.tr > 0) {
-      const cut = this.cuts.tr * Math.min(scaleX, scaleY);
+      const cut = getCut(this.cuts.tr);
       vertices.push({ x: r - cut, y: t }); // point on top edge
       vertices.push({ x: r, y: t + cut }); // point on right edge
     } else {
@@ -88,7 +98,7 @@ class Cell {
 
     // Bottom-right corner
     if (this.cuts.br > 0) {
-      const cut = this.cuts.br * Math.min(scaleX, scaleY);
+      const cut = getCut(this.cuts.br);
       vertices.push({ x: r, y: b - cut }); // point on right edge
       vertices.push({ x: r - cut, y: b }); // point on bottom edge
     } else {
@@ -97,7 +107,7 @@ class Cell {
 
     // Bottom-left corner
     if (this.cuts.bl > 0) {
-      const cut = this.cuts.bl * Math.min(scaleX, scaleY);
+      const cut = getCut(this.cuts.bl);
       vertices.push({ x: l + cut, y: b }); // point on bottom edge
       vertices.push({ x: l, y: b - cut }); // point on left edge
     } else {
@@ -106,7 +116,7 @@ class Cell {
 
     // Close top-left if it was cut (need the left edge point)
     if (this.cuts.tl > 0) {
-      const cut = this.cuts.tl * Math.min(scaleX, scaleY);
+      const cut = getCut(this.cuts.tl);
       vertices.push({ x: l, y: t + cut }); // point on left edge
     }
 
@@ -233,6 +243,7 @@ class EdgeGrid {
     // Reset all cuts
     for (const cell of this.cells) {
       cell.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
+      cell.cutDimension = null;
     }
 
     // Find pairs of adjacent cells that share a full edge and are aligned
@@ -302,25 +313,27 @@ class EdgeGrid {
     // Track which cells already have cuts to avoid conflicts
     const cellsWithCuts = new Set();
 
+    // Cut ratio of 0.5 = cut extends to midpoint of the relevant dimension
+    const cutRatio = 0.5;
+
     for (const diag of toApply) {
       if (diag.type === 'horizontal') {
         // Skip if either cell already has a cut
         if (cellsWithCuts.has(diag.left) || cellsWithCuts.has(diag.right)) continue;
 
-        // For horizontal neighbors, the shared edge is vertical (height h)
-        // Cut size = h/2 so diagonals meet at the midpoint
-        const h = diag.left.bottom.rest - diag.left.top.rest;
-        const cutSize = h / 2;
-
+        // For horizontal neighbors, the shared edge is vertical
+        // Cut is based on height (h/2) so diagonals meet at midpoint
         if (diag.direction === 'down') {
           // Diagonal goes from top-right of left cell to bottom-left of right cell
-          diag.left.cuts.tr = cutSize;
-          diag.right.cuts.bl = cutSize;
+          diag.left.cuts.tr = cutRatio;
+          diag.right.cuts.bl = cutRatio;
         } else {
           // Diagonal goes from bottom-right of left cell to top-left of right cell
-          diag.left.cuts.br = cutSize;
-          diag.right.cuts.tl = cutSize;
+          diag.left.cuts.br = cutRatio;
+          diag.right.cuts.tl = cutRatio;
         }
+        diag.left.cutDimension = 'height';
+        diag.right.cutDimension = 'height';
         cellsWithCuts.add(diag.left);
         cellsWithCuts.add(diag.right);
       }
@@ -328,20 +341,19 @@ class EdgeGrid {
         // Skip if either cell already has a cut
         if (cellsWithCuts.has(diag.top) || cellsWithCuts.has(diag.bottom)) continue;
 
-        // For vertical neighbors, the shared edge is horizontal (width w)
-        // Cut size = w/2 so diagonals meet at the midpoint
-        const w = diag.top.right.rest - diag.top.left.rest;
-        const cutSize = w / 2;
-
+        // For vertical neighbors, the shared edge is horizontal
+        // Cut is based on width (w/2) so diagonals meet at midpoint
         if (diag.direction === 'right') {
           // Diagonal goes from bottom-left of top cell to top-right of bottom cell
-          diag.top.cuts.bl = cutSize;
-          diag.bottom.cuts.tr = cutSize;
+          diag.top.cuts.bl = cutRatio;
+          diag.bottom.cuts.tr = cutRatio;
         } else {
           // Diagonal goes from bottom-right of top cell to top-left of bottom cell
-          diag.top.cuts.br = cutSize;
-          diag.bottom.cuts.tl = cutSize;
+          diag.top.cuts.br = cutRatio;
+          diag.bottom.cuts.tl = cutRatio;
         }
+        diag.top.cutDimension = 'width';
+        diag.bottom.cutDimension = 'width';
         cellsWithCuts.add(diag.top);
         cellsWithCuts.add(diag.bottom);
       }
