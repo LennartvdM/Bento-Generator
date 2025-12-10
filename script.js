@@ -200,168 +200,169 @@ class EdgeGrid {
 }
 
 // ============================================
-// SPRING PHYSICS ENGINE
+// SPRING PHYSICS ENGINE WITH INCOMPRESSIBILITY
 // ============================================
 
 class PhysicsEngine {
   constructor(edgeGrid) {
     this.grid = edgeGrid;
+    this.hoveredCell = null;
 
     // Physics parameters (tunable)
-    this.springStrength = 0.3;    // How strongly edges return to rest
-    this.damping = 0.75;          // Velocity decay
-    this.forcePropagation = 0.6;  // How much force transfers to connected edges
-    this.maxDisplacement = 100;   // Maximum edge movement from rest
+    this.springStrength = 0.15;      // How strongly edges return to rest
+    this.damping = 0.82;             // Velocity decay (higher = more momentum)
+    this.incompressibility = 0.7;    // How much cells resist compression (0-1)
+    this.minSizeRatio = 0.5;         // Cells can't shrink below this ratio of rest size
+    this.maxDisplacement = 150;      // Maximum edge movement from rest
+    this.rippleIterations = 3;       // How many times to propagate compression per frame
   }
 
   applyHoverForce(cell, scale) {
     if (!cell) return;
+    this.hoveredCell = cell;
 
     const expansion = scale - 1;
     if (expansion <= 0) return;
 
-    const expandX = cell.restWidth * expansion * 0.5;
-    const expandY = cell.restHeight * expansion * 0.5;
+    const expandX = cell.restWidth * expansion;
+    const expandY = cell.restHeight * expansion;
 
-    // Push all 4 edges outward
+    // Push all 4 edges outward with strong force
     if (!cell.top.isFixed) {
-      cell.top.force -= expandY * 2;
+      cell.top.force -= expandY * 1.5;
     }
     if (!cell.bottom.isFixed) {
-      cell.bottom.force += expandY * 2;
+      cell.bottom.force += expandY * 1.5;
     }
     if (!cell.left.isFixed) {
-      cell.left.force -= expandX * 2;
+      cell.left.force -= expandX * 1.5;
     }
     if (!cell.right.isFixed) {
-      cell.right.force += expandX * 2;
+      cell.right.force += expandX * 1.5;
     }
   }
 
-  propagateForces() {
-    // Forces ripple through connected edges
-    const propagated = new Map();
-
-    // Collect forces to propagate
-    for (const [id, edge] of this.grid.edges) {
-      if (Math.abs(edge.force) > 0.01) {
-        for (const connectedId of edge.connectedEdges) {
-          const connected = this.grid.edges.get(connectedId);
-          if (connected && !connected.isFixed) {
-            // Only propagate to edges of the same orientation
-            if (connected.isHorizontal === edge.isHorizontal) {
-              const key = connectedId;
-              const current = propagated.get(key) || 0;
-              propagated.set(key, current + edge.force * this.forcePropagation * 0.3);
-            }
-          }
-        }
-      }
-    }
-
-    // Apply propagated forces
-    for (const [id, force] of propagated) {
-      const edge = this.grid.edges.get(id);
-      if (edge) {
-        edge.force += force;
-      }
-    }
-  }
-
-  enforceMinimumCellSizes(minSize = 30) {
-    // Ensure no cell gets too small by applying corrective forces
+  // THE KEY: Cells resist compression by pushing their edges outward
+  applyIncompressibility() {
     for (const cell of this.grid.cells) {
-      const width = cell.right.pos - cell.left.pos;
-      const height = cell.bottom.pos - cell.top.pos;
+      // Skip the hovered cell - it's expanding, not compressed
+      if (cell === this.hoveredCell) continue;
 
-      if (width < minSize) {
-        const correction = (minSize - width) * 0.5;
-        if (!cell.left.isFixed) cell.left.force -= correction;
-        if (!cell.right.isFixed) cell.right.force += correction;
+      const currentWidth = cell.width;
+      const currentHeight = cell.height;
+      const restWidth = cell.restWidth;
+      const restHeight = cell.restHeight;
+
+      // Calculate compression ratios
+      const widthRatio = currentWidth / restWidth;
+      const heightRatio = currentHeight / restHeight;
+
+      // If compressed below threshold, push back
+      if (widthRatio < this.minSizeRatio) {
+        // Cell is too narrow - push left and right edges apart
+        const deficit = restWidth * this.minSizeRatio - currentWidth;
+        const force = deficit * this.incompressibility;
+
+        if (!cell.left.isFixed) cell.left.force -= force;
+        if (!cell.right.isFixed) cell.right.force += force;
       }
 
-      if (height < minSize) {
-        const correction = (minSize - height) * 0.5;
-        if (!cell.top.isFixed) cell.top.force -= correction;
-        if (!cell.bottom.isFixed) cell.bottom.force += correction;
+      if (heightRatio < this.minSizeRatio) {
+        // Cell is too short - push top and bottom edges apart
+        const deficit = restHeight * this.minSizeRatio - currentHeight;
+        const force = deficit * this.incompressibility;
+
+        if (!cell.top.isFixed) cell.top.force -= force;
+        if (!cell.bottom.isFixed) cell.bottom.force += force;
+      }
+
+      // SOFT compression resistance (even above threshold)
+      // This creates the ripple - cells push back proportionally to compression
+      if (widthRatio < 1.0) {
+        const compression = 1.0 - widthRatio;
+        const softForce = compression * restWidth * this.incompressibility * 0.3;
+
+        if (!cell.left.isFixed) cell.left.force -= softForce;
+        if (!cell.right.isFixed) cell.right.force += softForce;
+      }
+
+      if (heightRatio < 1.0) {
+        const compression = 1.0 - heightRatio;
+        const softForce = compression * restHeight * this.incompressibility * 0.3;
+
+        if (!cell.top.isFixed) cell.top.force -= softForce;
+        if (!cell.bottom.isFixed) cell.bottom.force += softForce;
       }
     }
   }
 
-  enforceEdgeOrder() {
-    // Ensure edges don't cross each other
-    // Group edges by their role and enforce ordering
-
-    // For each cell, ensure top < bottom and left < right
-    for (const cell of this.grid.cells) {
-      const minGap = 20;
-
-      if (cell.bottom.pos - cell.top.pos < minGap) {
-        const mid = (cell.top.pos + cell.bottom.pos) / 2;
-        if (!cell.top.isFixed) cell.top.target = Math.min(cell.top.target, mid - minGap/2);
-        if (!cell.bottom.isFixed) cell.bottom.target = Math.max(cell.bottom.target, mid + minGap/2);
-      }
-
-      if (cell.right.pos - cell.left.pos < minGap) {
-        const mid = (cell.left.pos + cell.right.pos) / 2;
-        if (!cell.left.isFixed) cell.left.target = Math.min(cell.left.target, mid - minGap/2);
-        if (!cell.right.isFixed) cell.right.target = Math.max(cell.right.target, mid + minGap/2);
-      }
-    }
-  }
-
-  update() {
-    // Propagate forces through the network
-    this.propagateForces();
-
-    // Enforce minimum cell sizes
-    this.enforceMinimumCellSizes();
-
-    // Update each edge
+  // Update edge positions based on forces
+  integrateForces() {
     for (const [id, edge] of this.grid.edges) {
       if (edge.isFixed) continue;
 
-      // Spring force toward rest position
+      // Spring force toward rest position (keeps system stable)
       const springForce = (edge.rest - edge.pos) * this.springStrength;
 
       // Total force
       const totalForce = edge.force + springForce;
 
-      // Update velocity
-      edge.velocity += totalForce;
+      // Update velocity with force
+      edge.velocity += totalForce * 0.1;
       edge.velocity *= this.damping;
 
-      // Calculate target position
-      edge.target = edge.pos + edge.velocity;
+      // Update position
+      edge.pos += edge.velocity;
 
       // Clamp displacement from rest
-      const displacement = edge.target - edge.rest;
+      const displacement = edge.pos - edge.rest;
       if (Math.abs(displacement) > this.maxDisplacement) {
-        edge.target = edge.rest + Math.sign(displacement) * this.maxDisplacement;
-        edge.velocity *= 0.5; // Dampen when hitting limit
+        edge.pos = edge.rest + Math.sign(displacement) * this.maxDisplacement;
+        edge.velocity *= 0.3;
       }
 
-      // Reset force for next frame
+      // Reset force for next iteration
       edge.force = 0;
     }
-
-    // Enforce edge ordering constraints
-    this.enforceEdgeOrder();
   }
 
-  lerp(lerpSpeed = 0.15) {
-    // Smooth interpolation to target
-    for (const [id, edge] of this.grid.edges) {
-      if (edge.isFixed) continue;
-      edge.pos += (edge.target - edge.pos) * lerpSpeed;
+  // Prevent edges from crossing (cells inverting)
+  enforceConstraints() {
+    const minCellSize = 25;
+
+    for (const cell of this.grid.cells) {
+      // Ensure minimum width
+      if (cell.width < minCellSize) {
+        const mid = (cell.left.pos + cell.right.pos) / 2;
+        if (!cell.left.isFixed) cell.left.pos = mid - minCellSize / 2;
+        if (!cell.right.isFixed) cell.right.pos = mid + minCellSize / 2;
+      }
+
+      // Ensure minimum height
+      if (cell.height < minCellSize) {
+        const mid = (cell.top.pos + cell.bottom.pos) / 2;
+        if (!cell.top.isFixed) cell.top.pos = mid - minCellSize / 2;
+        if (!cell.bottom.isFixed) cell.bottom.pos = mid + minCellSize / 2;
+      }
     }
+  }
+
+  update() {
+    // Run multiple iterations of incompressibility per frame
+    // This allows the ripple to propagate further each frame
+    for (let i = 0; i < this.rippleIterations; i++) {
+      this.applyIncompressibility();
+      this.integrateForces();
+    }
+
+    // Final constraint enforcement
+    this.enforceConstraints();
   }
 
   reset() {
-    // Reset all edges to rest position
+    this.hoveredCell = null;
     for (const [id, edge] of this.grid.edges) {
       edge.pos = edge.rest;
-      edge.target = edge.rest;
       edge.velocity = 0;
       edge.force = 0;
     }
@@ -381,7 +382,7 @@ class BentoGrid {
 
     // Settings
     this.gap = 8;
-    this.hoverScale = 1.15;
+    this.hoverScale = 1.35;
     this.subdivisionDepth = 5;
     this.minCellSize = 80;
 
@@ -455,14 +456,15 @@ class BentoGrid {
 
   startAnimation() {
     const tick = () => {
-      // Apply hover force
+      // Apply hover force or clear it
       if (this.hoveredCell) {
         this.physics.applyHoverForce(this.hoveredCell, this.hoverScale);
+      } else {
+        this.physics.hoveredCell = null;
       }
 
-      // Update physics
+      // Update physics (includes incompressibility ripple)
       this.physics.update();
-      this.physics.lerp(0.12);
 
       // Render
       this.render();
@@ -613,9 +615,10 @@ function init() {
 
   // Increase hover scale range for more dramatic effect
   hoverScaleSlider.min = 1;
-  hoverScaleSlider.max = 1.5;
-  hoverScaleSlider.value = 1.15;
-  hoverScaleValue.textContent = '1.15x';
+  hoverScaleSlider.max = 2;
+  hoverScaleSlider.step = 0.05;
+  hoverScaleSlider.value = 1.35;
+  hoverScaleValue.textContent = '1.35x';
 
   hoverScaleSlider.addEventListener('input', (e) => {
     const val = parseFloat(e.target.value);
