@@ -186,6 +186,7 @@ class PhysicsEngine {
     this.scaleSpeed = 0.25;      // How fast hovered cell expands
     this.rippleSpeed = 0.10;     // How fast neighbors respond to forces
     this.overshoot = 0.15;       // Bounciness (0 = critically damped, 0.5 = very bouncy)
+    this.fillRatio = 0;          // Counter aspect ratio: flat shapes grow tall, tall shapes grow wide
 
     this.rippleIterations = 3;
   }
@@ -210,8 +211,28 @@ class PhysicsEngine {
     // Calculate target positions for hovered cell's edges
     const cx = cell.restX + cell.restWidth / 2;
     const cy = cell.restY + cell.restHeight / 2;
-    const targetHalfW = (cell.restWidth * scale) / 2;
-    const targetHalfH = (cell.restHeight * scale) / 2;
+
+    // Apply fill ratio: counteract aspect ratio
+    // Flat shapes (aspect > 1) grow more vertically
+    // Tall shapes (aspect < 1) grow more horizontally
+    const aspect = cell.restWidth / cell.restHeight;
+    let scaleX = scale;
+    let scaleY = scale;
+
+    if (this.fillRatio > 0) {
+      if (aspect > 1) {
+        // Wide/flat shape - boost vertical scaling
+        const boost = 1 + (aspect - 1) * this.fillRatio;
+        scaleY = 1 + (scale - 1) * boost;
+      } else if (aspect < 1) {
+        // Tall shape - boost horizontal scaling
+        const boost = 1 + (1 / aspect - 1) * this.fillRatio;
+        scaleX = 1 + (scale - 1) * boost;
+      }
+    }
+
+    const targetHalfW = (cell.restWidth * scaleX) / 2;
+    const targetHalfH = (cell.restHeight * scaleY) / 2;
 
     // Move hovered edges DIRECTLY toward targets (authoritative, no fighting)
     if (!cell.top.isBoundary) {
@@ -612,6 +633,10 @@ class BentoGrid {
   setOvershoot(value) {
     if (this.physics) this.physics.overshoot = value;
   }
+
+  setFillRatio(value) {
+    if (this.physics) this.physics.fillRatio = value;
+  }
 }
 
 // ============================================
@@ -693,6 +718,12 @@ function init() {
       display: document.getElementById('overshootValue'),
       handler: (val) => bentoGrid.setOvershoot(parseFloat(val)),
       format: (val) => parseFloat(val).toFixed(2)
+    },
+    fillRatio: {
+      el: document.getElementById('fillRatio'),
+      display: document.getElementById('fillRatioValue'),
+      handler: (val) => bentoGrid.setFillRatio(parseFloat(val)),
+      format: (val) => parseFloat(val).toFixed(1)
     }
   };
 
