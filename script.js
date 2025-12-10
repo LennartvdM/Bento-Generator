@@ -170,14 +170,18 @@ class PhysicsEngine {
   constructor(edgeGrid) {
     this.grid = edgeGrid;
     this.hoveredCell = null;
+    this.hoverScale = 1;
+
+    // Track which edges belong to hovered cell (they have priority)
+    this.hoveredEdges = new Set();
 
     // Physics parameters (exposed to UI)
     this.springStrength = 0.12;
     this.damping = 0.80;
     this.incompressibility = 0.7;
     this.minSizeRatio = 0.5;
-    this.bleedZone = 50;           // How far boundaries can flex outward
-    this.boundaryResistance = 0.8; // How strongly boundaries resist movement
+    this.bleedZone = 50;
+    this.boundaryResistance = 0.8;
 
     this.rippleIterations = 3;
   }
@@ -185,61 +189,139 @@ class PhysicsEngine {
   applyHoverForce(cell, scale) {
     if (!cell) return;
     this.hoveredCell = cell;
+    this.hoverScale = scale;
 
-    const expansion = scale - 1;
-    if (expansion <= 0) return;
+    // Mark hovered cell's edges
+    this.hoveredEdges.clear();
+    this.hoveredEdges.add(cell.top);
+    this.hoveredEdges.add(cell.bottom);
+    this.hoveredEdges.add(cell.left);
+    this.hoveredEdges.add(cell.right);
 
-    const expandX = cell.restWidth * expansion;
-    const expandY = cell.restHeight * expansion;
+    // Calculate target positions for hovered cell's edges
+    const cx = cell.restX + cell.restWidth / 2;
+    const cy = cell.restY + cell.restHeight / 2;
+    const targetHalfW = (cell.restWidth * scale) / 2;
+    const targetHalfH = (cell.restHeight * scale) / 2;
 
-    // Push all 4 edges outward
-    cell.top.force -= expandY * 1.5;
-    cell.bottom.force += expandY * 1.5;
-    cell.left.force -= expandX * 1.5;
-    cell.right.force += expandX * 1.5;
+    // Move hovered edges DIRECTLY toward targets (authoritative, no fighting)
+    const lerpSpeed = 0.25;
+
+    if (!cell.top.isBoundary) {
+      const targetY = cy - targetHalfH;
+      cell.top.pos += (targetY - cell.top.pos) * lerpSpeed;
+      cell.top.velocity = 0; // No momentum, just direct movement
+    }
+    if (!cell.bottom.isBoundary) {
+      const targetY = cy + targetHalfH;
+      cell.bottom.pos += (targetY - cell.bottom.pos) * lerpSpeed;
+      cell.bottom.velocity = 0;
+    }
+    if (!cell.left.isBoundary) {
+      const targetX = cx - targetHalfW;
+      cell.left.pos += (targetX - cell.left.pos) * lerpSpeed;
+      cell.left.velocity = 0;
+    }
+    if (!cell.right.isBoundary) {
+      const targetX = cx + targetHalfW;
+      cell.right.pos += (targetX - cell.right.pos) * lerpSpeed;
+      cell.right.velocity = 0;
+    }
   }
 
   applyIncompressibility() {
+    if (!this.hoveredCell) return;
+
+    // Get hover cell center for directional reference
+    const hoverCx = this.hoveredCell.restX + this.hoveredCell.restWidth / 2;
+    const hoverCy = this.hoveredCell.restY + this.hoveredCell.restHeight / 2;
+
     for (const cell of this.grid.cells) {
       if (cell === this.hoveredCell) continue;
 
       const widthRatio = cell.width / cell.restWidth;
       const heightRatio = cell.height / cell.restHeight;
 
+      // Cell center for direction calculation
+      const cellCx = cell.restX + cell.restWidth / 2;
+      const cellCy = cell.restY + cell.restHeight / 2;
+
+      // Direction FROM hover TO this cell (this is the allowed push direction)
+      const dirX = cellCx - hoverCx;
+      const dirY = cellCy - hoverCy;
+
       // Hard limit: push back strongly when below minimum
       if (widthRatio < this.minSizeRatio) {
         const deficit = cell.restWidth * this.minSizeRatio - cell.width;
         const force = deficit * this.incompressibility * 1.5;
-        cell.left.force -= force;
-        cell.right.force += force;
+
+        // Only push edges in the direction AWAY from hover
+        if (!this.hoveredEdges.has(cell.left)) {
+          // Left edge can only move left (negative) if cell is left of hover
+          if (dirX < 0) cell.left.force -= force;
+        }
+        if (!this.hoveredEdges.has(cell.right)) {
+          // Right edge can only move right (positive) if cell is right of hover
+          if (dirX > 0) cell.right.force += force;
+        }
+        // If neither direction works, allow both (edge case)
+        if (dirX === 0) {
+          if (!this.hoveredEdges.has(cell.left)) cell.left.force -= force * 0.5;
+          if (!this.hoveredEdges.has(cell.right)) cell.right.force += force * 0.5;
+        }
       }
 
       if (heightRatio < this.minSizeRatio) {
         const deficit = cell.restHeight * this.minSizeRatio - cell.height;
         const force = deficit * this.incompressibility * 1.5;
-        cell.top.force -= force;
-        cell.bottom.force += force;
+
+        if (!this.hoveredEdges.has(cell.top)) {
+          if (dirY < 0) cell.top.force -= force;
+        }
+        if (!this.hoveredEdges.has(cell.bottom)) {
+          if (dirY > 0) cell.bottom.force += force;
+        }
+        if (dirY === 0) {
+          if (!this.hoveredEdges.has(cell.top)) cell.top.force -= force * 0.5;
+          if (!this.hoveredEdges.has(cell.bottom)) cell.bottom.force += force * 0.5;
+        }
       }
 
-      // Soft resistance: gradual pushback proportional to compression
+      // Soft resistance (same directional logic)
       if (widthRatio < 1.0) {
         const compression = 1.0 - widthRatio;
         const softForce = compression * cell.restWidth * this.incompressibility * 0.4;
-        cell.left.force -= softForce;
-        cell.right.force += softForce;
+
+        if (!this.hoveredEdges.has(cell.left) && dirX <= 0) {
+          cell.left.force -= softForce;
+        }
+        if (!this.hoveredEdges.has(cell.right) && dirX >= 0) {
+          cell.right.force += softForce;
+        }
       }
 
       if (heightRatio < 1.0) {
         const compression = 1.0 - heightRatio;
         const softForce = compression * cell.restHeight * this.incompressibility * 0.4;
-        cell.top.force -= softForce;
-        cell.bottom.force += softForce;
+
+        if (!this.hoveredEdges.has(cell.top) && dirY <= 0) {
+          cell.top.force -= softForce;
+        }
+        if (!this.hoveredEdges.has(cell.bottom) && dirY >= 0) {
+          cell.bottom.force += softForce;
+        }
       }
     }
   }
 
   integrateForces() {
     for (const [, edge] of this.grid.edges) {
+      // Skip hovered cell's edges - they move directly, not through forces
+      if (this.hoveredEdges.has(edge)) {
+        edge.force = 0;
+        continue;
+      }
+
       // Boundaries use stronger spring to resist movement
       const springMult = edge.isBoundary ? this.boundaryResistance * 3 : 1;
       const springForce = (edge.rest - edge.pos) * this.springStrength * springMult;
@@ -252,28 +334,20 @@ class PhysicsEngine {
 
       // Clamp boundaries to bleed zone
       if (edge.isBoundary) {
-        const displacement = edge.pos - edge.rest;
-        // Boundaries can only move OUTWARD (away from center)
         if (edge === this.grid.topBoundary) {
-          // Top can move up (negative) only
           edge.pos = Math.max(edge.rest - this.bleedZone, Math.min(edge.rest, edge.pos));
         } else if (edge === this.grid.bottomBoundary) {
-          // Bottom can move down (positive) only
           edge.pos = Math.min(edge.rest + this.bleedZone, Math.max(edge.rest, edge.pos));
         } else if (edge === this.grid.leftBoundary) {
-          // Left can move left (negative) only
           edge.pos = Math.max(edge.rest - this.bleedZone, Math.min(edge.rest, edge.pos));
         } else if (edge === this.grid.rightBoundary) {
-          // Right can move right (positive) only
           edge.pos = Math.min(edge.rest + this.bleedZone, Math.max(edge.rest, edge.pos));
         }
 
-        // Dampen velocity when hitting bleed limit
         if (Math.abs(edge.pos - edge.rest) >= this.bleedZone * 0.95) {
           edge.velocity *= 0.3;
         }
       } else {
-        // Internal edges: limit total displacement
         const maxDisp = 200;
         const disp = edge.pos - edge.rest;
         if (Math.abs(disp) > maxDisp) {
@@ -290,16 +364,27 @@ class PhysicsEngine {
     const minCellSize = 20;
 
     for (const cell of this.grid.cells) {
+      // Don't constrain hovered cell
+      if (cell === this.hoveredCell) continue;
+
       if (cell.width < minCellSize) {
         const mid = (cell.left.pos + cell.right.pos) / 2;
-        if (!cell.left.isBoundary) cell.left.pos = mid - minCellSize / 2;
-        if (!cell.right.isBoundary) cell.right.pos = mid + minCellSize / 2;
+        if (!cell.left.isBoundary && !this.hoveredEdges.has(cell.left)) {
+          cell.left.pos = mid - minCellSize / 2;
+        }
+        if (!cell.right.isBoundary && !this.hoveredEdges.has(cell.right)) {
+          cell.right.pos = mid + minCellSize / 2;
+        }
       }
 
       if (cell.height < minCellSize) {
         const mid = (cell.top.pos + cell.bottom.pos) / 2;
-        if (!cell.top.isBoundary) cell.top.pos = mid - minCellSize / 2;
-        if (!cell.bottom.isBoundary) cell.bottom.pos = mid + minCellSize / 2;
+        if (!cell.top.isBoundary && !this.hoveredEdges.has(cell.top)) {
+          cell.top.pos = mid - minCellSize / 2;
+        }
+        if (!cell.bottom.isBoundary && !this.hoveredEdges.has(cell.bottom)) {
+          cell.bottom.pos = mid + minCellSize / 2;
+        }
       }
     }
   }
@@ -312,8 +397,14 @@ class PhysicsEngine {
     this.enforceConstraints();
   }
 
-  reset() {
+  clearHover() {
     this.hoveredCell = null;
+    this.hoverScale = 1;
+    this.hoveredEdges.clear();
+  }
+
+  reset() {
+    this.clearHover();
     for (const [, edge] of this.grid.edges) {
       edge.pos = edge.rest;
       edge.velocity = 0;
@@ -406,7 +497,7 @@ class BentoGrid {
       if (this.hoveredCell) {
         this.physics.applyHoverForce(this.hoveredCell, this.hoverScale);
       } else {
-        this.physics.hoveredCell = null;
+        this.physics.clearHover();
       }
 
       this.physics.update();
