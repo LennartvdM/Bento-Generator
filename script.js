@@ -177,13 +177,22 @@ class PhysicsEngine {
 
     // Physics parameters (exposed to UI)
     this.springStrength = 0.12;
-    this.damping = 0.80;
     this.incompressibility = 0.7;
     this.minSizeRatio = 0.5;
     this.bleedZone = 50;
     this.boundaryResistance = 0.8;
 
+    // Animation parameters (exposed to UI)
+    this.scaleSpeed = 0.25;      // How fast hovered cell expands
+    this.rippleSpeed = 0.10;     // How fast neighbors respond to forces
+    this.overshoot = 0.15;       // Bounciness (0 = critically damped, 0.5 = very bouncy)
+
     this.rippleIterations = 3;
+  }
+
+  // Damping derived from overshoot (more overshoot = less damping)
+  get damping() {
+    return 0.92 - this.overshoot * 0.3;
   }
 
   applyHoverForce(cell, scale) {
@@ -205,26 +214,24 @@ class PhysicsEngine {
     const targetHalfH = (cell.restHeight * scale) / 2;
 
     // Move hovered edges DIRECTLY toward targets (authoritative, no fighting)
-    const lerpSpeed = 0.25;
-
     if (!cell.top.isBoundary) {
       const targetY = cy - targetHalfH;
-      cell.top.pos += (targetY - cell.top.pos) * lerpSpeed;
-      cell.top.velocity = 0; // No momentum, just direct movement
+      cell.top.pos += (targetY - cell.top.pos) * this.scaleSpeed;
+      cell.top.velocity = 0;
     }
     if (!cell.bottom.isBoundary) {
       const targetY = cy + targetHalfH;
-      cell.bottom.pos += (targetY - cell.bottom.pos) * lerpSpeed;
+      cell.bottom.pos += (targetY - cell.bottom.pos) * this.scaleSpeed;
       cell.bottom.velocity = 0;
     }
     if (!cell.left.isBoundary) {
       const targetX = cx - targetHalfW;
-      cell.left.pos += (targetX - cell.left.pos) * lerpSpeed;
+      cell.left.pos += (targetX - cell.left.pos) * this.scaleSpeed;
       cell.left.velocity = 0;
     }
     if (!cell.right.isBoundary) {
       const targetX = cx + targetHalfW;
-      cell.right.pos += (targetX - cell.right.pos) * lerpSpeed;
+      cell.right.pos += (targetX - cell.right.pos) * this.scaleSpeed;
       cell.right.velocity = 0;
     }
   }
@@ -328,7 +335,7 @@ class PhysicsEngine {
 
       const totalForce = edge.force + springForce;
 
-      edge.velocity += totalForce * 0.1;
+      edge.velocity += totalForce * this.rippleSpeed;
       edge.velocity *= this.damping;
       edge.pos += edge.velocity;
 
@@ -593,6 +600,18 @@ class BentoGrid {
   setBleedZone(value) {
     if (this.physics) this.physics.bleedZone = value;
   }
+
+  setScaleSpeed(value) {
+    if (this.physics) this.physics.scaleSpeed = value;
+  }
+
+  setRippleSpeed(value) {
+    if (this.physics) this.physics.rippleSpeed = value;
+  }
+
+  setOvershoot(value) {
+    if (this.physics) this.physics.overshoot = value;
+  }
 }
 
 // ============================================
@@ -656,6 +675,24 @@ function init() {
       display: document.getElementById('bleedValue'),
       handler: (val) => bentoGrid.setBleedZone(parseFloat(val)),
       format: (val) => val + 'px'
+    },
+    scaleSpeed: {
+      el: document.getElementById('scaleSpeed'),
+      display: document.getElementById('scaleSpeedValue'),
+      handler: (val) => bentoGrid.setScaleSpeed(parseFloat(val)),
+      format: (val) => parseFloat(val).toFixed(2)
+    },
+    ripple: {
+      el: document.getElementById('ripple'),
+      display: document.getElementById('rippleValue'),
+      handler: (val) => bentoGrid.setRippleSpeed(parseFloat(val)),
+      format: (val) => parseFloat(val).toFixed(2)
+    },
+    overshoot: {
+      el: document.getElementById('overshoot'),
+      display: document.getElementById('overshootValue'),
+      handler: (val) => bentoGrid.setOvershoot(parseFloat(val)),
+      format: (val) => parseFloat(val).toFixed(2)
     }
   };
 
