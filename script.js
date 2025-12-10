@@ -64,9 +64,14 @@ class Cell {
 
     const vertices = [];
 
+    // cuts.XX contains the actual pixel offset for the diagonal cut
+    // Scale cut proportionally when cell is resized from rest state
+    const scaleX = w / (this.right.rest - this.left.rest) || 1;
+    const scaleY = h / (this.bottom.rest - this.top.rest) || 1;
+
     // Top-left corner
     if (this.cuts.tl > 0) {
-      const cut = Math.min(this.cuts.tl * Math.min(w, h), w * 0.4, h * 0.4);
+      const cut = this.cuts.tl * Math.min(scaleX, scaleY);
       vertices.push({ x: l + cut, y: t });
     } else {
       vertices.push({ x: l, y: t });
@@ -74,35 +79,35 @@ class Cell {
 
     // Top-right corner
     if (this.cuts.tr > 0) {
-      const cut = Math.min(this.cuts.tr * Math.min(w, h), w * 0.4, h * 0.4);
-      vertices.push({ x: r - cut, y: t });
-      vertices.push({ x: r, y: t + cut });
+      const cut = this.cuts.tr * Math.min(scaleX, scaleY);
+      vertices.push({ x: r - cut, y: t }); // point on top edge
+      vertices.push({ x: r, y: t + cut }); // point on right edge
     } else {
       vertices.push({ x: r, y: t });
     }
 
     // Bottom-right corner
     if (this.cuts.br > 0) {
-      const cut = Math.min(this.cuts.br * Math.min(w, h), w * 0.4, h * 0.4);
-      vertices.push({ x: r, y: b - cut });
-      vertices.push({ x: r - cut, y: b });
+      const cut = this.cuts.br * Math.min(scaleX, scaleY);
+      vertices.push({ x: r, y: b - cut }); // point on right edge
+      vertices.push({ x: r - cut, y: b }); // point on bottom edge
     } else {
       vertices.push({ x: r, y: b });
     }
 
     // Bottom-left corner
     if (this.cuts.bl > 0) {
-      const cut = Math.min(this.cuts.bl * Math.min(w, h), w * 0.4, h * 0.4);
-      vertices.push({ x: l + cut, y: b });
-      vertices.push({ x: l, y: b - cut });
+      const cut = this.cuts.bl * Math.min(scaleX, scaleY);
+      vertices.push({ x: l + cut, y: b }); // point on bottom edge
+      vertices.push({ x: l, y: b - cut }); // point on left edge
     } else {
       vertices.push({ x: l, y: b });
     }
 
-    // Complete top-left if cut
+    // Close top-left if it was cut (need the left edge point)
     if (this.cuts.tl > 0) {
-      const cut = Math.min(this.cuts.tl * Math.min(w, h), w * 0.4, h * 0.4);
-      vertices.push({ x: l, y: t + cut });
+      const cut = this.cuts.tl * Math.min(scaleX, scaleY);
+      vertices.push({ x: l, y: t + cut }); // point on left edge
     }
 
     return vertices;
@@ -221,7 +226,7 @@ class EdgeGrid {
     );
   }
 
-  // Add diagonal cuts at internal corners
+  // Add diagonal cuts - slices that run across two aligned adjacent cells
   addDiagonals(count) {
     if (count <= 0) return;
 
@@ -230,50 +235,115 @@ class EdgeGrid {
       cell.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
     }
 
-    // Find all internal corners (where cells meet)
-    // A corner is defined by its x,y position
-    const corners = new Map(); // "x,y" -> { cells: [...], isInternal: bool }
+    // Find pairs of adjacent cells that share a full edge and are aligned
+    const diagonalCandidates = [];
 
-    for (const cell of this.cells) {
-      const tl = `${cell.left.rest},${cell.top.rest}`;
-      const tr = `${cell.right.rest},${cell.top.rest}`;
-      const bl = `${cell.left.rest},${cell.bottom.rest}`;
-      const br = `${cell.right.rest},${cell.bottom.rest}`;
+    for (let i = 0; i < this.cells.length; i++) {
+      for (let j = i + 1; j < this.cells.length; j++) {
+        const a = this.cells[i];
+        const b = this.cells[j];
 
-      // Add cell to each corner
-      for (const [key, corner] of [[tl, 'tl'], [tr, 'tr'], [bl, 'bl'], [br, 'br']]) {
-        if (!corners.has(key)) {
-          corners.set(key, { cells: [], cornerTypes: [] });
+        // Check for horizontal neighbors (share a vertical edge)
+        // They must have matching top AND bottom (same height, aligned)
+        if (a.right === b.left &&
+            Math.abs(a.top.rest - b.top.rest) < 1 &&
+            Math.abs(a.bottom.rest - b.bottom.rest) < 1) {
+          // a is left of b - diagonal can go either direction
+          diagonalCandidates.push({
+            type: 'horizontal',
+            left: a,
+            right: b,
+            direction: Math.random() < 0.5 ? 'down' : 'up' // top-right to bottom-left, or vice versa
+          });
         }
-        corners.get(key).cells.push(cell);
-        corners.get(key).cornerTypes.push(corner);
+        else if (b.right === a.left &&
+                 Math.abs(a.top.rest - b.top.rest) < 1 &&
+                 Math.abs(a.bottom.rest - b.bottom.rest) < 1) {
+          // b is left of a
+          diagonalCandidates.push({
+            type: 'horizontal',
+            left: b,
+            right: a,
+            direction: Math.random() < 0.5 ? 'down' : 'up'
+          });
+        }
+
+        // Check for vertical neighbors (share a horizontal edge)
+        // They must have matching left AND right (same width, aligned)
+        if (a.bottom === b.top &&
+            Math.abs(a.left.rest - b.left.rest) < 1 &&
+            Math.abs(a.right.rest - b.right.rest) < 1) {
+          // a is above b
+          diagonalCandidates.push({
+            type: 'vertical',
+            top: a,
+            bottom: b,
+            direction: Math.random() < 0.5 ? 'right' : 'left' // bottom-left to top-right, or vice versa
+          });
+        }
+        else if (b.bottom === a.top &&
+                 Math.abs(a.left.rest - b.left.rest) < 1 &&
+                 Math.abs(a.right.rest - b.right.rest) < 1) {
+          // b is above a
+          diagonalCandidates.push({
+            type: 'vertical',
+            top: b,
+            bottom: a,
+            direction: Math.random() < 0.5 ? 'right' : 'left'
+          });
+        }
       }
     }
 
-    // Filter to internal corners (not on boundary, shared by 2+ cells)
-    const internalCorners = [];
-    for (const [key, data] of corners) {
-      const [x, y] = key.split(',').map(Number);
-      const onBoundary = x === 0 || y === 0 ||
-                         x === this.width || y === this.height;
+    // Shuffle and pick requested number
+    const shuffled = diagonalCandidates.sort(() => Math.random() - 0.5);
+    const toApply = shuffled.slice(0, Math.min(count, shuffled.length));
 
-      // Must have at least 2 cells sharing this corner to be interesting
-      if (!onBoundary && data.cells.length >= 2) {
-        internalCorners.push({ x, y, ...data });
+    // Track which cells already have cuts to avoid conflicts
+    const cellsWithCuts = new Set();
+
+    for (const diag of toApply) {
+      if (diag.type === 'horizontal') {
+        // Skip if either cell already has a cut
+        if (cellsWithCuts.has(diag.left) || cellsWithCuts.has(diag.right)) continue;
+
+        // For horizontal neighbors, the shared edge is vertical (height h)
+        // Cut size = h/2 so diagonals meet at the midpoint
+        const h = diag.left.bottom.rest - diag.left.top.rest;
+        const cutSize = h / 2;
+
+        if (diag.direction === 'down') {
+          // Diagonal goes from top-right of left cell to bottom-left of right cell
+          diag.left.cuts.tr = cutSize;
+          diag.right.cuts.bl = cutSize;
+        } else {
+          // Diagonal goes from bottom-right of left cell to top-left of right cell
+          diag.left.cuts.br = cutSize;
+          diag.right.cuts.tl = cutSize;
+        }
+        cellsWithCuts.add(diag.left);
+        cellsWithCuts.add(diag.right);
       }
-    }
+      else if (diag.type === 'vertical') {
+        // Skip if either cell already has a cut
+        if (cellsWithCuts.has(diag.top) || cellsWithCuts.has(diag.bottom)) continue;
 
-    // Randomly select corners to cut
-    const shuffled = internalCorners.sort(() => Math.random() - 0.5);
-    const toCut = shuffled.slice(0, Math.min(count, shuffled.length));
+        // For vertical neighbors, the shared edge is horizontal (width w)
+        // Cut size = w/2 so diagonals meet at the midpoint
+        const w = diag.top.right.rest - diag.top.left.rest;
+        const cutSize = w / 2;
 
-    // Apply cuts to all cells sharing each corner
-    const cutSize = 0.35; // 35% of min dimension
-    for (const corner of toCut) {
-      for (let i = 0; i < corner.cells.length; i++) {
-        const cell = corner.cells[i];
-        const type = corner.cornerTypes[i];
-        cell.cuts[type] = cutSize;
+        if (diag.direction === 'right') {
+          // Diagonal goes from bottom-left of top cell to top-right of bottom cell
+          diag.top.cuts.bl = cutSize;
+          diag.bottom.cuts.tr = cutSize;
+        } else {
+          // Diagonal goes from bottom-right of top cell to top-left of bottom cell
+          diag.top.cuts.br = cutSize;
+          diag.bottom.cuts.tl = cutSize;
+        }
+        cellsWithCuts.add(diag.top);
+        cellsWithCuts.add(diag.bottom);
       }
     }
   }
