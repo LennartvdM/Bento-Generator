@@ -13,25 +13,19 @@ const PALETTE = [
 // ============================================
 
 class Edge {
-  constructor(id, position, isHorizontal, isFixed = false) {
+  constructor(id, position, isHorizontal, isBoundary = false) {
     this.id = id;
-    this.isHorizontal = isHorizontal; // horizontal edges have y position, vertical have x
-    this.isFixed = isFixed; // boundary edges don't move
+    this.isHorizontal = isHorizontal;
+    this.isBoundary = isBoundary; // Boundaries can flex but resist strongly
 
     // Physics state
-    this.rest = position;      // where it wants to be
-    this.pos = position;       // current position
-    this.target = position;    // target for lerping
+    this.rest = position;
+    this.pos = position;
     this.velocity = 0;
     this.force = 0;
 
-    // Connections to other edges (for force propagation)
+    // Connections to other edges
     this.connectedEdges = new Set();
-  }
-
-  // Get position value (y for horizontal, x for vertical)
-  get value() {
-    return this.pos;
   }
 }
 
@@ -45,7 +39,6 @@ class Cell {
     this.color = PALETTE[id % PALETTE.length];
   }
 
-  // Derived properties from edges
   get x() { return this.left.pos; }
   get y() { return this.top.pos; }
   get width() { return this.right.pos - this.left.pos; }
@@ -55,9 +48,6 @@ class Cell {
   get restY() { return this.top.rest; }
   get restWidth() { return this.right.rest - this.left.rest; }
   get restHeight() { return this.bottom.rest - this.top.rest; }
-
-  get centerX() { return this.x + this.width / 2; }
-  get centerY() { return this.y + this.height / 2; }
 
   containsPoint(px, py) {
     return px >= this.x && px <= this.x + this.width &&
@@ -75,32 +65,29 @@ class EdgeGrid {
     this.height = height;
     this.gap = gap;
 
-    this.edges = new Map();     // id -> Edge
-    this.cells = [];            // Cell[]
+    this.edges = new Map();
+    this.cells = [];
     this.edgeIdCounter = 0;
 
-    // Create boundary edges (fixed)
+    // Create boundary edges (soft - can flex outward)
     this.topBoundary = this.createEdge(0, true, true);
     this.bottomBoundary = this.createEdge(height, true, true);
     this.leftBoundary = this.createEdge(0, false, true);
     this.rightBoundary = this.createEdge(width, false, true);
   }
 
-  createEdge(position, isHorizontal, isFixed = false) {
+  createEdge(position, isHorizontal, isBoundary = false) {
     const id = `e${this.edgeIdCounter++}`;
-    const edge = new Edge(id, position, isHorizontal, isFixed);
+    const edge = new Edge(id, position, isHorizontal, isBoundary);
     this.edges.set(id, edge);
     return edge;
   }
 
-  // Recursive binary space partition
   subdivide(topEdge, bottomEdge, leftEdge, rightEdge, depth, minSize) {
     const width = rightEdge.rest - leftEdge.rest;
     const height = bottomEdge.rest - topEdge.rest;
 
-    // Stop conditions
     if (depth <= 0 || (width < minSize * 2 && height < minSize * 2)) {
-      // Create a cell
       const cell = new Cell(
         this.cells.length,
         topEdge, bottomEdge, leftEdge, rightEdge
@@ -109,49 +96,40 @@ class EdgeGrid {
       return;
     }
 
-    // Decide split direction based on aspect ratio and randomness
     const aspectRatio = width / height;
     let splitHorizontal;
 
     if (width < minSize * 1.5) {
-      splitHorizontal = true; // Force horizontal split
+      splitHorizontal = true;
     } else if (height < minSize * 1.5) {
-      splitHorizontal = false; // Force vertical split
+      splitHorizontal = false;
     } else {
-      // Bias toward splitting the longer dimension
       const horizontalBias = aspectRatio < 1 ? 0.7 : 0.3;
       splitHorizontal = Math.random() < horizontalBias;
     }
 
-    // Random split ratio (avoid extremes)
     const splitRatio = 0.3 + Math.random() * 0.4;
 
     if (splitHorizontal) {
-      // Create horizontal split edge
       const splitY = topEdge.rest + (bottomEdge.rest - topEdge.rest) * splitRatio;
       const splitEdge = this.createEdge(splitY, true, false);
 
-      // Connect edges (for force propagation)
       splitEdge.connectedEdges.add(leftEdge.id);
       splitEdge.connectedEdges.add(rightEdge.id);
       leftEdge.connectedEdges.add(splitEdge.id);
       rightEdge.connectedEdges.add(splitEdge.id);
 
-      // Recurse
       this.subdivide(topEdge, splitEdge, leftEdge, rightEdge, depth - 1, minSize);
       this.subdivide(splitEdge, bottomEdge, leftEdge, rightEdge, depth - 1, minSize);
     } else {
-      // Create vertical split edge
       const splitX = leftEdge.rest + (rightEdge.rest - leftEdge.rest) * splitRatio;
       const splitEdge = this.createEdge(splitX, false, false);
 
-      // Connect edges
       splitEdge.connectedEdges.add(topEdge.id);
       splitEdge.connectedEdges.add(bottomEdge.id);
       topEdge.connectedEdges.add(splitEdge.id);
       bottomEdge.connectedEdges.add(splitEdge.id);
 
-      // Recurse
       this.subdivide(topEdge, bottomEdge, leftEdge, splitEdge, depth - 1, minSize);
       this.subdivide(topEdge, bottomEdge, splitEdge, rightEdge, depth - 1, minSize);
     }
@@ -159,43 +137,28 @@ class EdgeGrid {
 
   generate(subdivisionDepth = 5, minCellSize = 60) {
     this.cells = [];
-    // Reset edges except boundaries
+
     const boundaryIds = new Set([
       this.topBoundary.id, this.bottomBoundary.id,
       this.leftBoundary.id, this.rightBoundary.id
     ]);
 
-    for (const [id, edge] of this.edges) {
+    for (const [id] of this.edges) {
       if (!boundaryIds.has(id)) {
         this.edges.delete(id);
       }
     }
 
-    // Clear connections on boundaries
     this.topBoundary.connectedEdges.clear();
     this.bottomBoundary.connectedEdges.clear();
     this.leftBoundary.connectedEdges.clear();
     this.rightBoundary.connectedEdges.clear();
 
-    // Start subdivision
     this.subdivide(
       this.topBoundary, this.bottomBoundary,
       this.leftBoundary, this.rightBoundary,
       subdivisionDepth, minCellSize
     );
-
-    // Apply gap by adjusting rest positions
-    this.applyGap();
-  }
-
-  applyGap() {
-    const halfGap = this.gap / 2;
-
-    this.cells.forEach(cell => {
-      // Shrink each cell by half-gap on each side
-      // We do this by storing an inset amount on each cell
-      cell.inset = halfGap;
-    });
   }
 }
 
@@ -208,13 +171,15 @@ class PhysicsEngine {
     this.grid = edgeGrid;
     this.hoveredCell = null;
 
-    // Physics parameters (tunable)
-    this.springStrength = 0.15;      // How strongly edges return to rest
-    this.damping = 0.82;             // Velocity decay (higher = more momentum)
-    this.incompressibility = 0.7;    // How much cells resist compression (0-1)
-    this.minSizeRatio = 0.5;         // Cells can't shrink below this ratio of rest size
-    this.maxDisplacement = 150;      // Maximum edge movement from rest
-    this.rippleIterations = 3;       // How many times to propagate compression per frame
+    // Physics parameters (exposed to UI)
+    this.springStrength = 0.12;
+    this.damping = 0.80;
+    this.incompressibility = 0.7;
+    this.minSizeRatio = 0.5;
+    this.bleedZone = 50;           // How far boundaries can flex outward
+    this.boundaryResistance = 0.8; // How strongly boundaries resist movement
+
+    this.rippleIterations = 3;
   }
 
   applyHoverForce(cell, scale) {
@@ -227,141 +192,129 @@ class PhysicsEngine {
     const expandX = cell.restWidth * expansion;
     const expandY = cell.restHeight * expansion;
 
-    // Push all 4 edges outward with strong force
-    if (!cell.top.isFixed) {
-      cell.top.force -= expandY * 1.5;
-    }
-    if (!cell.bottom.isFixed) {
-      cell.bottom.force += expandY * 1.5;
-    }
-    if (!cell.left.isFixed) {
-      cell.left.force -= expandX * 1.5;
-    }
-    if (!cell.right.isFixed) {
-      cell.right.force += expandX * 1.5;
-    }
+    // Push all 4 edges outward
+    cell.top.force -= expandY * 1.5;
+    cell.bottom.force += expandY * 1.5;
+    cell.left.force -= expandX * 1.5;
+    cell.right.force += expandX * 1.5;
   }
 
-  // THE KEY: Cells resist compression by pushing their edges outward
   applyIncompressibility() {
     for (const cell of this.grid.cells) {
-      // Skip the hovered cell - it's expanding, not compressed
       if (cell === this.hoveredCell) continue;
 
-      const currentWidth = cell.width;
-      const currentHeight = cell.height;
-      const restWidth = cell.restWidth;
-      const restHeight = cell.restHeight;
+      const widthRatio = cell.width / cell.restWidth;
+      const heightRatio = cell.height / cell.restHeight;
 
-      // Calculate compression ratios
-      const widthRatio = currentWidth / restWidth;
-      const heightRatio = currentHeight / restHeight;
-
-      // If compressed below threshold, push back
+      // Hard limit: push back strongly when below minimum
       if (widthRatio < this.minSizeRatio) {
-        // Cell is too narrow - push left and right edges apart
-        const deficit = restWidth * this.minSizeRatio - currentWidth;
-        const force = deficit * this.incompressibility;
-
-        if (!cell.left.isFixed) cell.left.force -= force;
-        if (!cell.right.isFixed) cell.right.force += force;
+        const deficit = cell.restWidth * this.minSizeRatio - cell.width;
+        const force = deficit * this.incompressibility * 1.5;
+        cell.left.force -= force;
+        cell.right.force += force;
       }
 
       if (heightRatio < this.minSizeRatio) {
-        // Cell is too short - push top and bottom edges apart
-        const deficit = restHeight * this.minSizeRatio - currentHeight;
-        const force = deficit * this.incompressibility;
-
-        if (!cell.top.isFixed) cell.top.force -= force;
-        if (!cell.bottom.isFixed) cell.bottom.force += force;
+        const deficit = cell.restHeight * this.minSizeRatio - cell.height;
+        const force = deficit * this.incompressibility * 1.5;
+        cell.top.force -= force;
+        cell.bottom.force += force;
       }
 
-      // SOFT compression resistance (even above threshold)
-      // This creates the ripple - cells push back proportionally to compression
+      // Soft resistance: gradual pushback proportional to compression
       if (widthRatio < 1.0) {
         const compression = 1.0 - widthRatio;
-        const softForce = compression * restWidth * this.incompressibility * 0.3;
-
-        if (!cell.left.isFixed) cell.left.force -= softForce;
-        if (!cell.right.isFixed) cell.right.force += softForce;
+        const softForce = compression * cell.restWidth * this.incompressibility * 0.4;
+        cell.left.force -= softForce;
+        cell.right.force += softForce;
       }
 
       if (heightRatio < 1.0) {
         const compression = 1.0 - heightRatio;
-        const softForce = compression * restHeight * this.incompressibility * 0.3;
-
-        if (!cell.top.isFixed) cell.top.force -= softForce;
-        if (!cell.bottom.isFixed) cell.bottom.force += softForce;
+        const softForce = compression * cell.restHeight * this.incompressibility * 0.4;
+        cell.top.force -= softForce;
+        cell.bottom.force += softForce;
       }
     }
   }
 
-  // Update edge positions based on forces
   integrateForces() {
-    for (const [id, edge] of this.grid.edges) {
-      if (edge.isFixed) continue;
+    for (const [, edge] of this.grid.edges) {
+      // Boundaries use stronger spring to resist movement
+      const springMult = edge.isBoundary ? this.boundaryResistance * 3 : 1;
+      const springForce = (edge.rest - edge.pos) * this.springStrength * springMult;
 
-      // Spring force toward rest position (keeps system stable)
-      const springForce = (edge.rest - edge.pos) * this.springStrength;
-
-      // Total force
       const totalForce = edge.force + springForce;
 
-      // Update velocity with force
       edge.velocity += totalForce * 0.1;
       edge.velocity *= this.damping;
-
-      // Update position
       edge.pos += edge.velocity;
 
-      // Clamp displacement from rest
-      const displacement = edge.pos - edge.rest;
-      if (Math.abs(displacement) > this.maxDisplacement) {
-        edge.pos = edge.rest + Math.sign(displacement) * this.maxDisplacement;
-        edge.velocity *= 0.3;
+      // Clamp boundaries to bleed zone
+      if (edge.isBoundary) {
+        const displacement = edge.pos - edge.rest;
+        // Boundaries can only move OUTWARD (away from center)
+        if (edge === this.grid.topBoundary) {
+          // Top can move up (negative) only
+          edge.pos = Math.max(edge.rest - this.bleedZone, Math.min(edge.rest, edge.pos));
+        } else if (edge === this.grid.bottomBoundary) {
+          // Bottom can move down (positive) only
+          edge.pos = Math.min(edge.rest + this.bleedZone, Math.max(edge.rest, edge.pos));
+        } else if (edge === this.grid.leftBoundary) {
+          // Left can move left (negative) only
+          edge.pos = Math.max(edge.rest - this.bleedZone, Math.min(edge.rest, edge.pos));
+        } else if (edge === this.grid.rightBoundary) {
+          // Right can move right (positive) only
+          edge.pos = Math.min(edge.rest + this.bleedZone, Math.max(edge.rest, edge.pos));
+        }
+
+        // Dampen velocity when hitting bleed limit
+        if (Math.abs(edge.pos - edge.rest) >= this.bleedZone * 0.95) {
+          edge.velocity *= 0.3;
+        }
+      } else {
+        // Internal edges: limit total displacement
+        const maxDisp = 200;
+        const disp = edge.pos - edge.rest;
+        if (Math.abs(disp) > maxDisp) {
+          edge.pos = edge.rest + Math.sign(disp) * maxDisp;
+          edge.velocity *= 0.3;
+        }
       }
 
-      // Reset force for next iteration
       edge.force = 0;
     }
   }
 
-  // Prevent edges from crossing (cells inverting)
   enforceConstraints() {
-    const minCellSize = 25;
+    const minCellSize = 20;
 
     for (const cell of this.grid.cells) {
-      // Ensure minimum width
       if (cell.width < minCellSize) {
         const mid = (cell.left.pos + cell.right.pos) / 2;
-        if (!cell.left.isFixed) cell.left.pos = mid - minCellSize / 2;
-        if (!cell.right.isFixed) cell.right.pos = mid + minCellSize / 2;
+        if (!cell.left.isBoundary) cell.left.pos = mid - minCellSize / 2;
+        if (!cell.right.isBoundary) cell.right.pos = mid + minCellSize / 2;
       }
 
-      // Ensure minimum height
       if (cell.height < minCellSize) {
         const mid = (cell.top.pos + cell.bottom.pos) / 2;
-        if (!cell.top.isFixed) cell.top.pos = mid - minCellSize / 2;
-        if (!cell.bottom.isFixed) cell.bottom.pos = mid + minCellSize / 2;
+        if (!cell.top.isBoundary) cell.top.pos = mid - minCellSize / 2;
+        if (!cell.bottom.isBoundary) cell.bottom.pos = mid + minCellSize / 2;
       }
     }
   }
 
   update() {
-    // Run multiple iterations of incompressibility per frame
-    // This allows the ripple to propagate further each frame
     for (let i = 0; i < this.rippleIterations; i++) {
       this.applyIncompressibility();
       this.integrateForces();
     }
-
-    // Final constraint enforcement
     this.enforceConstraints();
   }
 
   reset() {
     this.hoveredCell = null;
-    for (const [id, edge] of this.grid.edges) {
+    for (const [, edge] of this.grid.edges) {
       edge.pos = edge.rest;
       edge.velocity = 0;
       edge.force = 0;
@@ -382,7 +335,7 @@ class BentoGrid {
 
     // Settings
     this.gap = 8;
-    this.hoverScale = 1.35;
+    this.hoverScale = 1.4;
     this.subdivisionDepth = 5;
     this.minCellSize = 80;
 
@@ -390,7 +343,6 @@ class BentoGrid {
     this.edgeGrid = null;
     this.physics = null;
     this.hoveredCell = null;
-    this.animId = null;
     this.canvasOffsetX = 0;
     this.canvasOffsetY = 0;
 
@@ -405,8 +357,7 @@ class BentoGrid {
     this.width = rect.width;
     this.height = rect.height;
 
-    // Add padding around canvas
-    const padding = 150;
+    const padding = 200;
     this.canvas.width = this.width + padding * 2;
     this.canvas.height = this.height + padding * 2;
 
@@ -429,7 +380,6 @@ class BentoGrid {
       const mx = e.clientX - rect.left - this.canvasOffsetX;
       const my = e.clientY - rect.top - this.canvasOffsetY;
 
-      // Find hovered cell
       this.hoveredCell = null;
       for (const cell of this.edgeGrid.cells) {
         if (cell.containsPoint(mx, my)) {
@@ -445,31 +395,24 @@ class BentoGrid {
   }
 
   regenerate() {
-    // Create new edge grid
     this.edgeGrid = new EdgeGrid(this.width, this.height, this.gap);
     this.edgeGrid.generate(this.subdivisionDepth, this.minCellSize);
-
-    // Create physics engine
     this.physics = new PhysicsEngine(this.edgeGrid);
     this.physics.reset();
   }
 
   startAnimation() {
     const tick = () => {
-      // Apply hover force or clear it
       if (this.hoveredCell) {
         this.physics.applyHoverForce(this.hoveredCell, this.hoverScale);
       } else {
         this.physics.hoveredCell = null;
       }
 
-      // Update physics (includes incompressibility ripple)
       this.physics.update();
-
-      // Render
       this.render();
 
-      this.animId = requestAnimationFrame(tick);
+      requestAnimationFrame(tick);
     };
 
     tick();
@@ -486,9 +429,7 @@ class BentoGrid {
     const halfGap = gap / 2;
     const radius = 6;
 
-    // Draw cells
     for (const cell of this.edgeGrid.cells) {
-      // Apply gap inset
       const x = cell.x + halfGap;
       const y = cell.y + halfGap;
       const w = cell.width - gap;
@@ -498,13 +439,12 @@ class BentoGrid {
 
       const isHovered = cell === this.hoveredCell;
 
-      // Check if outside container
+      // Check if any part is outside the original container bounds
       const isOutside = x < 0 || y < 0 || x + w > this.width || y + h > this.height;
 
       ctx.fillStyle = isHovered ? '#ef4444' : cell.color;
-      ctx.globalAlpha = isOutside ? 0.4 : 0.9;
+      ctx.globalAlpha = isOutside ? 0.5 : 0.9;
 
-      // Draw rounded rectangle
       ctx.beginPath();
       ctx.moveTo(x + radius, y);
       ctx.lineTo(x + w - radius, y);
@@ -519,8 +459,8 @@ class BentoGrid {
 
       ctx.fill();
 
-      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 1.5;
       ctx.stroke();
     }
 
@@ -539,9 +479,7 @@ class BentoGrid {
 
   setGap(gap) {
     this.gap = gap;
-    if (this.edgeGrid) {
-      this.edgeGrid.gap = gap;
-    }
+    if (this.edgeGrid) this.edgeGrid.gap = gap;
   }
 
   setHoverScale(scale) {
@@ -553,9 +491,16 @@ class BentoGrid {
     this.regenerate();
   }
 
-  setMinCellSize(size) {
-    this.minCellSize = size;
-    this.regenerate();
+  setIncompressibility(value) {
+    if (this.physics) this.physics.incompressibility = value;
+  }
+
+  setMinSizeRatio(value) {
+    if (this.physics) this.physics.minSizeRatio = value;
+  }
+
+  setBleedZone(value) {
+    if (this.physics) this.physics.bleedZone = value;
   }
 }
 
@@ -569,9 +514,8 @@ function updateMetrics() {
   const metricsEl = document.getElementById('metrics');
   if (metricsEl) {
     metricsEl.innerHTML = `
-      <div>Cells</div><div>${bentoGrid.getShapeCount()}</div>
-      <div>Edges</div><div>${bentoGrid.getEdgeCount()}</div>
-      <div>Gap</div><div>${bentoGrid.gap}px</div>
+      <div><span style="opacity:0.5">Cells:</span> ${bentoGrid.getShapeCount()}</div>
+      <div><span style="opacity:0.5">Edges:</span> ${bentoGrid.getEdgeCount()}</div>
     `;
   }
 }
@@ -581,51 +525,60 @@ let bentoGrid;
 function init() {
   bentoGrid = new BentoGrid('container');
 
-  // Setup sliders
-  const gridScaleSlider = document.getElementById('gridScale');
-  const gridScaleValue = document.getElementById('gridScaleValue');
-  const gapSlider = document.getElementById('gap');
-  const gapValue = document.getElementById('gapValue');
-  const hoverScaleSlider = document.getElementById('hoverScale');
-  const hoverScaleValue = document.getElementById('hoverScaleValue');
+  // Wire up all controls
+  const controls = {
+    subdivisions: {
+      el: document.getElementById('subdivisions'),
+      display: document.getElementById('subdivisionsValue'),
+      handler: (val) => {
+        bentoGrid.setSubdivisionDepth(parseInt(val));
+        updateMetrics();
+      },
+      format: (val) => val
+    },
+    gap: {
+      el: document.getElementById('gap'),
+      display: document.getElementById('gapValue'),
+      handler: (val) => bentoGrid.setGap(parseFloat(val)),
+      format: (val) => val
+    },
+    hoverScale: {
+      el: document.getElementById('hoverScale'),
+      display: document.getElementById('hoverScaleValue'),
+      handler: (val) => bentoGrid.setHoverScale(parseFloat(val)),
+      format: (val) => parseFloat(val).toFixed(1) + 'x'
+    },
+    incompress: {
+      el: document.getElementById('incompress'),
+      display: document.getElementById('incompressValue'),
+      handler: (val) => bentoGrid.setIncompressibility(parseFloat(val)),
+      format: (val) => parseFloat(val).toFixed(2)
+    },
+    minSize: {
+      el: document.getElementById('minSize'),
+      display: document.getElementById('minSizeValue'),
+      handler: (val) => bentoGrid.setMinSizeRatio(parseFloat(val)),
+      format: (val) => Math.round(parseFloat(val) * 100) + '%'
+    },
+    bleed: {
+      el: document.getElementById('bleed'),
+      display: document.getElementById('bleedValue'),
+      handler: (val) => bentoGrid.setBleedZone(parseFloat(val)),
+      format: (val) => val + 'px'
+    }
+  };
 
-  // Repurpose gridScale slider for subdivision depth
-  gridScaleSlider.min = 3;
-  gridScaleSlider.max = 7;
-  gridScaleSlider.step = 1;
-  gridScaleSlider.value = 5;
-  gridScaleValue.textContent = '5';
+  // Setup each control
+  for (const [, ctrl] of Object.entries(controls)) {
+    if (ctrl.el) {
+      ctrl.el.addEventListener('input', (e) => {
+        ctrl.handler(e.target.value);
+        if (ctrl.display) ctrl.display.textContent = ctrl.format(e.target.value);
+      });
+    }
+  }
 
-  // Update label
-  const scaleLabel = gridScaleSlider.previousElementSibling;
-  if (scaleLabel) scaleLabel.textContent = 'Depth:';
-
-  gridScaleSlider.addEventListener('input', (e) => {
-    const val = parseInt(e.target.value);
-    gridScaleValue.textContent = val;
-    bentoGrid.setSubdivisionDepth(val);
-    updateMetrics();
-  });
-
-  gapSlider.addEventListener('input', (e) => {
-    const val = parseFloat(e.target.value);
-    gapValue.textContent = val;
-    bentoGrid.setGap(val);
-  });
-
-  // Increase hover scale range for more dramatic effect
-  hoverScaleSlider.min = 1;
-  hoverScaleSlider.max = 2;
-  hoverScaleSlider.step = 0.05;
-  hoverScaleSlider.value = 1.35;
-  hoverScaleValue.textContent = '1.35x';
-
-  hoverScaleSlider.addEventListener('input', (e) => {
-    const val = parseFloat(e.target.value);
-    hoverScaleValue.textContent = val.toFixed(2) + 'x';
-    bentoGrid.setHoverScale(val);
-  });
-
+  // Regenerate button
   document.getElementById('regen').addEventListener('click', () => {
     bentoGrid.regenerate();
     updateMetrics();
