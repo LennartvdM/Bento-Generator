@@ -16,7 +16,7 @@ class Edge {
   constructor(id, position, isHorizontal, isBoundary = false) {
     this.id = id;
     this.isHorizontal = isHorizontal;
-    this.isBoundary = isBoundary; // Boundaries can flex but resist strongly
+    this.isBoundary = isBoundary;
 
     // Physics state
     this.rest = position;
@@ -37,6 +37,9 @@ class Cell {
     this.left = leftEdge;
     this.right = rightEdge;
     this.color = PALETTE[id % PALETTE.length];
+
+    // Corner cuts: { tl, tr, bl, br } - each is a cut size ratio (0-0.5)
+    this.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
   }
 
   get x() { return this.left.pos; }
@@ -49,7 +52,64 @@ class Cell {
   get restWidth() { return this.right.rest - this.left.rest; }
   get restHeight() { return this.bottom.rest - this.top.rest; }
 
+  // Get polygon vertices (clockwise from top-left)
+  getVertices(gap = 0) {
+    const halfGap = gap / 2;
+    const l = this.left.pos + halfGap;
+    const r = this.right.pos - halfGap;
+    const t = this.top.pos + halfGap;
+    const b = this.bottom.pos - halfGap;
+    const w = r - l;
+    const h = b - t;
+
+    const vertices = [];
+
+    // Top-left corner
+    if (this.cuts.tl > 0) {
+      const cut = Math.min(this.cuts.tl * Math.min(w, h), w * 0.4, h * 0.4);
+      vertices.push({ x: l + cut, y: t });
+    } else {
+      vertices.push({ x: l, y: t });
+    }
+
+    // Top-right corner
+    if (this.cuts.tr > 0) {
+      const cut = Math.min(this.cuts.tr * Math.min(w, h), w * 0.4, h * 0.4);
+      vertices.push({ x: r - cut, y: t });
+      vertices.push({ x: r, y: t + cut });
+    } else {
+      vertices.push({ x: r, y: t });
+    }
+
+    // Bottom-right corner
+    if (this.cuts.br > 0) {
+      const cut = Math.min(this.cuts.br * Math.min(w, h), w * 0.4, h * 0.4);
+      vertices.push({ x: r, y: b - cut });
+      vertices.push({ x: r - cut, y: b });
+    } else {
+      vertices.push({ x: r, y: b });
+    }
+
+    // Bottom-left corner
+    if (this.cuts.bl > 0) {
+      const cut = Math.min(this.cuts.bl * Math.min(w, h), w * 0.4, h * 0.4);
+      vertices.push({ x: l + cut, y: b });
+      vertices.push({ x: l, y: b - cut });
+    } else {
+      vertices.push({ x: l, y: b });
+    }
+
+    // Complete top-left if cut
+    if (this.cuts.tl > 0) {
+      const cut = Math.min(this.cuts.tl * Math.min(w, h), w * 0.4, h * 0.4);
+      vertices.push({ x: l, y: t + cut });
+    }
+
+    return vertices;
+  }
+
   containsPoint(px, py) {
+    // Simple bounding box check (could be improved for cut corners)
     return px >= this.x && px <= this.x + this.width &&
            py >= this.y && py <= this.y + this.height;
   }
@@ -159,6 +219,63 @@ class EdgeGrid {
       this.leftBoundary, this.rightBoundary,
       subdivisionDepth, minCellSize
     );
+  }
+
+  // Add diagonal cuts at internal corners
+  addDiagonals(count) {
+    if (count <= 0) return;
+
+    // Reset all cuts
+    for (const cell of this.cells) {
+      cell.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
+    }
+
+    // Find all internal corners (where cells meet)
+    // A corner is defined by its x,y position
+    const corners = new Map(); // "x,y" -> { cells: [...], isInternal: bool }
+
+    for (const cell of this.cells) {
+      const tl = `${cell.left.rest},${cell.top.rest}`;
+      const tr = `${cell.right.rest},${cell.top.rest}`;
+      const bl = `${cell.left.rest},${cell.bottom.rest}`;
+      const br = `${cell.right.rest},${cell.bottom.rest}`;
+
+      // Add cell to each corner
+      for (const [key, corner] of [[tl, 'tl'], [tr, 'tr'], [bl, 'bl'], [br, 'br']]) {
+        if (!corners.has(key)) {
+          corners.set(key, { cells: [], cornerTypes: [] });
+        }
+        corners.get(key).cells.push(cell);
+        corners.get(key).cornerTypes.push(corner);
+      }
+    }
+
+    // Filter to internal corners (not on boundary, shared by 2+ cells)
+    const internalCorners = [];
+    for (const [key, data] of corners) {
+      const [x, y] = key.split(',').map(Number);
+      const onBoundary = x === 0 || y === 0 ||
+                         x === this.width || y === this.height;
+
+      // Must have at least 2 cells sharing this corner to be interesting
+      if (!onBoundary && data.cells.length >= 2) {
+        internalCorners.push({ x, y, ...data });
+      }
+    }
+
+    // Randomly select corners to cut
+    const shuffled = internalCorners.sort(() => Math.random() - 0.5);
+    const toCut = shuffled.slice(0, Math.min(count, shuffled.length));
+
+    // Apply cuts to all cells sharing each corner
+    const cutSize = 0.35; // 35% of min dimension
+    for (const corner of toCut) {
+      for (let i = 0; i < corner.cells.length; i++) {
+        const cell = corner.cells[i];
+        const type = corner.cornerTypes[i];
+        cell.cuts[type] = cutSize;
+      }
+    }
   }
 }
 
@@ -457,6 +574,7 @@ class BentoGrid {
     this.hoverScale = 1.4;
     this.subdivisionDepth = 5;
     this.minCellSize = 80;
+    this.diagonalCount = 0;
 
     // State
     this.edgeGrid = null;
@@ -516,6 +634,7 @@ class BentoGrid {
   regenerate() {
     this.edgeGrid = new EdgeGrid(this.width, this.height, this.gap);
     this.edgeGrid.generate(this.subdivisionDepth, this.minCellSize);
+    this.edgeGrid.addDiagonals(this.diagonalCount);
     this.physics = new PhysicsEngine(this.edgeGrid);
     this.physics.reset();
   }
@@ -545,35 +664,63 @@ class BentoGrid {
     ctx.translate(this.canvasOffsetX, this.canvasOffsetY);
 
     const gap = this.gap;
-    const halfGap = gap / 2;
     const radius = 6;
 
     for (const cell of this.edgeGrid.cells) {
-      const x = cell.x + halfGap;
-      const y = cell.y + halfGap;
-      const w = cell.width - gap;
-      const h = cell.height - gap;
+      const vertices = cell.getVertices(gap);
+      if (vertices.length < 3) continue;
 
-      if (w <= 0 || h <= 0) continue;
+      // Bounding box for outside check
+      const minX = Math.min(...vertices.map(v => v.x));
+      const minY = Math.min(...vertices.map(v => v.y));
+      const maxX = Math.max(...vertices.map(v => v.x));
+      const maxY = Math.max(...vertices.map(v => v.y));
+
+      if (maxX - minX <= 0 || maxY - minY <= 0) continue;
 
       const isHovered = cell === this.hoveredCell;
-
-      // Check if any part is outside the original container bounds
-      const isOutside = x < 0 || y < 0 || x + w > this.width || y + h > this.height;
+      const isOutside = minX < 0 || minY < 0 || maxX > this.width || maxY > this.height;
 
       ctx.fillStyle = isHovered ? '#ef4444' : cell.color;
       ctx.globalAlpha = isOutside ? 0.5 : 0.9;
 
+      // Draw polygon with rounded corners
       ctx.beginPath();
-      ctx.moveTo(x + radius, y);
-      ctx.lineTo(x + w - radius, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-      ctx.lineTo(x + w, y + h - radius);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-      ctx.lineTo(x + radius, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-      ctx.lineTo(x, y + radius);
-      ctx.quadraticCurveTo(x, y, x + radius, y);
+      const n = vertices.length;
+      for (let i = 0; i < n; i++) {
+        const curr = vertices[i];
+        const next = vertices[(i + 1) % n];
+
+        // Vector to next vertex
+        const dx = next.x - curr.x;
+        const dy = next.y - curr.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+
+        // Use smaller radius for short edges
+        const r = Math.min(radius, len / 3);
+
+        if (i === 0) {
+          // Move to first point (offset by radius toward next)
+          ctx.moveTo(curr.x + (dx / len) * r, curr.y + (dy / len) * r);
+        }
+
+        // Line to just before next corner
+        const endX = next.x - (dx / len) * r;
+        const endY = next.y - (dy / len) * r;
+        ctx.lineTo(endX, endY);
+
+        // Rounded corner at next vertex
+        const afterNext = vertices[(i + 2) % n];
+        const dx2 = afterNext.x - next.x;
+        const dy2 = afterNext.y - next.y;
+        const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+        const r2 = Math.min(radius, len2 / 3);
+
+        const cornerEndX = next.x + (dx2 / len2) * r2;
+        const cornerEndY = next.y + (dy2 / len2) * r2;
+
+        ctx.quadraticCurveTo(next.x, next.y, cornerEndX, cornerEndY);
+      }
       ctx.closePath();
 
       ctx.fill();
@@ -636,6 +783,11 @@ class BentoGrid {
 
   setFillRatio(value) {
     if (this.physics) this.physics.fillRatio = value;
+  }
+
+  setDiagonalCount(value) {
+    this.diagonalCount = value;
+    // Note: Requires regenerate() to take effect
   }
 }
 
@@ -724,6 +876,16 @@ function init() {
       display: document.getElementById('fillRatioValue'),
       handler: (val) => bentoGrid.setFillRatio(parseFloat(val)),
       format: (val) => parseFloat(val).toFixed(1)
+    },
+    diagonals: {
+      el: document.getElementById('diagonals'),
+      display: document.getElementById('diagonalsValue'),
+      handler: (val) => {
+        bentoGrid.setDiagonalCount(parseInt(val));
+        bentoGrid.regenerate();
+        updateMetrics();
+      },
+      format: (val) => val
     }
   };
 
