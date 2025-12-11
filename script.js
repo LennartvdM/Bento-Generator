@@ -221,7 +221,7 @@ class EdgeGrid {
     return diag;
   }
 
-  generate(depth = 5, minSize = 60, diagonalCount = 0) {
+  generate(depth = 5, minSize = 60, diagonalCount = 0, maxHoverScale = 1.5) {
     // Reset
     const boundaryIds = new Set([
       this.topBoundary.id, this.bottomBoundary.id,
@@ -242,7 +242,7 @@ class EdgeGrid {
     );
 
     // Add diagonals between eligible adjacent cell pairs
-    this.addDiagonals(diagonalCount);
+    this.addDiagonals(diagonalCount, maxHoverScale);
   }
 
   subdivide(topEdge, bottomEdge, leftEdge, rightEdge, depth, minSize) {
@@ -284,8 +284,12 @@ class EdgeGrid {
   }
 
   // Find pairs of adjacent cells and add diagonal edges between them
-  addDiagonals(count) {
+  addDiagonals(count, maxHoverScale = 1.5) {
     if (count <= 0) return;
+
+    // Calculate overlap fraction based on max hover scale
+    // For scale S, expansion per side = (S-1)/2, plus 10% buffer for safety
+    const overlapFraction = (maxHoverScale - 1) / 2 + 0.1;
 
     // Find all pairs of cells that share an edge and are aligned
     const pairs = [];
@@ -340,14 +344,15 @@ class EdgeGrid {
         const rightWidth = right.right.rest - right.left.rest;
 
         // Skip cells that are too small or too thin (would create "duds")
-        const minDim = 100;
+        // Increase minDim based on overlap to ensure visible pentagons
+        const minDim = 120;
         const maxAspect = 2.5;
         if (leftWidth < minDim || rightWidth < minDim || height < minDim) continue;
         if (leftWidth / height > maxAspect || height / leftWidth > maxAspect) continue;
         if (rightWidth / height > maxAspect || height / rightWidth > maxAspect) continue;
 
-        // Smaller overlap to prevent triangles (diagonal spans full height)
-        const maxOverlap = Math.min(leftWidth * 0.25, rightWidth * 0.25, height * 0.25);
+        // Overlap based on max hover scale to guarantee coverage during expansion
+        const maxOverlap = Math.min(leftWidth * overlapFraction, rightWidth * overlapFraction, height * overlapFraction);
         const halfH = maxOverlap;
 
         const diagonalDown = Math.random() < 0.5;
@@ -386,14 +391,15 @@ class EdgeGrid {
         const bottomHeight = bottom.bottom.rest - bottom.top.rest;
 
         // Skip cells that are too small or too thin (would create "duds")
-        const minDim = 100;
+        // Increase minDim based on overlap to ensure visible pentagons
+        const minDim = 120;
         const maxAspect = 2.5;
         if (topHeight < minDim || bottomHeight < minDim || width < minDim) continue;
         if (width / topHeight > maxAspect || topHeight / width > maxAspect) continue;
         if (width / bottomHeight > maxAspect || bottomHeight / width > maxAspect) continue;
 
-        // Smaller overlap to prevent triangles (diagonal spans full width)
-        const maxOverlap = Math.min(topHeight * 0.25, bottomHeight * 0.25, width * 0.25);
+        // Overlap based on max hover scale to guarantee coverage during expansion
+        const maxOverlap = Math.min(topHeight * overlapFraction, bottomHeight * overlapFraction, width * overlapFraction);
         const halfW = maxOverlap;
 
         const diagonalRight = Math.random() < 0.5;
@@ -691,7 +697,7 @@ class BentoGrid {
 
   regenerate() {
     this.grid = new EdgeGrid(this.width, this.height);
-    this.grid.generate(this.subdivisionDepth, this.minCellSize, this.diagonalCount);
+    this.grid.generate(this.subdivisionDepth, this.minCellSize, this.diagonalCount, this.hoverScale);
     this.physics = new PhysicsEngine(this.grid);
     this.physics.reset();
   }
