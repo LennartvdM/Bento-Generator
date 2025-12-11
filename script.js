@@ -311,10 +311,12 @@ class EdgeGrid {
         const bottom = left.bottom.rest;
         const height = bottom - top;
 
-        // Create diagonal across the shared edge
-        // Diagonal runs from (sharedX - h/2, top) to (sharedX + h/2, bottom)
-        // or the reverse direction
-        const halfH = height / 2;
+        // Limit overlap to prevent triangles (keep it smaller than cell widths)
+        const leftWidth = left.right.rest - left.left.rest;
+        const rightWidth = right.right.rest - right.left.rest;
+        const maxOverlap = Math.min(leftWidth * 0.4, rightWidth * 0.4, height * 0.4);
+        const halfH = maxOverlap;
+
         const diagonalDown = Math.random() < 0.5;
 
         let diag;
@@ -347,7 +349,12 @@ class EdgeGrid {
         const right = top.right.rest;
         const width = right - left;
 
-        const halfW = width / 2;
+        // Limit overlap to prevent triangles (keep it smaller than cell heights)
+        const topHeight = top.bottom.rest - top.top.rest;
+        const bottomHeight = bottom.bottom.rest - bottom.top.rest;
+        const maxOverlap = Math.min(topHeight * 0.4, bottomHeight * 0.4, width * 0.4);
+        const halfW = maxOverlap;
+
         const diagonalRight = Math.random() < 0.5;
 
         let diag;
