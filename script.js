@@ -779,30 +779,31 @@ class BentoGrid {
         ctx.save();
         ctx.clip();
 
-        // Image zoom: zoomed in by default, zooms out on hover
-        // Account for cell expansion: if cell expands to hoverScale (e.g. 1.4x),
-        // image must zoom to (1.0 / hoverScale) to achieve 1.0x effective zoom
+        // Image zoom: zoomed in by default (1.3x), zooms out on hover (1.0x)
+        // Size image based on REST dimensions so zoom is independent of cell expansion
         const defaultZoom = 1.3;
-        const hoverZoom = 1.0 / this.hoverScale;
+        const hoverZoom = 1.0;
         const zoom = isHovered ? hoverZoom : defaultZoom;
 
-        const cellW = maxX - minX;
-        const cellH = maxY - minY;
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
 
-        // Scale image to cover cell, then apply zoom
+        // Use REST dimensions for image sizing (not current expanded dimensions)
+        const restCellW = cell.restWidth;
+        const restCellH = cell.restHeight;
+
+        // Scale image to cover cell at rest size, then apply zoom
         const imgAspect = cell.image.naturalWidth / cell.image.naturalHeight;
-        const cellAspect = cellW / cellH;
+        const cellAspect = restCellW / restCellH;
 
         let drawW, drawH;
         if (imgAspect > cellAspect) {
           // Image is wider - fit to height
-          drawH = cellH * zoom;
+          drawH = restCellH * zoom;
           drawW = drawH * imgAspect;
         } else {
           // Image is taller - fit to width
-          drawW = cellW * zoom;
+          drawW = restCellW * zoom;
           drawH = drawW / imgAspect;
         }
 
