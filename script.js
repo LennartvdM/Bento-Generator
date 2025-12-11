@@ -152,9 +152,35 @@ class Cell {
     return result;
   }
 
-  containsPoint(px, py) {
-    return px >= this.x && px <= this.x + this.width &&
-           py >= this.y && py <= this.y + this.height;
+  // Point-in-polygon test using ray casting algorithm
+  containsPoint(px, py, gap = 0) {
+    // First do quick bounding box check
+    if (px < this.x || px > this.x + this.width ||
+        py < this.y || py > this.y + this.height) {
+      return false;
+    }
+
+    // If no diagonal clips, bounding box is sufficient
+    if (this.diagonalClips.length === 0) {
+      return true;
+    }
+
+    // Use actual polygon for precise hit testing
+    const vertices = this.getVertices(gap);
+    if (vertices.length < 3) return false;
+
+    // Ray casting algorithm
+    let inside = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i].x, yi = vertices[i].y;
+      const xj = vertices[j].x, yj = vertices[j].y;
+
+      if (((yi > py) !== (yj > py)) &&
+          (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
   }
 }
 
@@ -650,7 +676,8 @@ class BentoGrid {
 
       this.hoveredCell = null;
       for (const cell of this.grid.cells) {
-        if (cell.containsPoint(mx, my)) {
+        // Use gap for accurate polygon hit testing on diagonal cells
+        if (cell.containsPoint(mx, my, this.gap)) {
           this.hoveredCell = cell;
           break;
         }
