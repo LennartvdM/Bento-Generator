@@ -307,23 +307,29 @@ class EdgeGrid {
 
         // Shared vertical edge position
         const sharedX = left.right.rest;
-        const top = left.top.rest;
-        const bottom = left.bottom.rest;
-        const height = bottom - top;
+        const topY = left.top.rest;
+        const bottomY = left.bottom.rest;
+        const height = bottomY - topY;
 
-        // Limit overlap to prevent triangles (keep it smaller than cell widths)
+        // Limit overlap to prevent triangles
         const leftWidth = left.right.rest - left.left.rest;
         const rightWidth = right.right.rest - right.left.rest;
-        const maxOverlap = Math.min(leftWidth * 0.4, rightWidth * 0.4, height * 0.4);
+        const maxOverlap = Math.min(leftWidth * 0.35, rightWidth * 0.35, height * 0.35);
         const halfH = maxOverlap;
+
+        // Diagonal only spans middle portion, not full height
+        // This creates pentagons, not triangles
+        const inset = height * 0.15; // Leave corners intact
+        const diagTop = topY + inset;
+        const diagBottom = bottomY - inset;
 
         const diagonalDown = Math.random() < 0.5;
 
         let diag;
         if (diagonalDown) {
-          diag = this.createDiagonal(sharedX - halfH, top, sharedX + halfH, bottom);
+          diag = this.createDiagonal(sharedX - halfH, diagTop, sharedX + halfH, diagBottom);
         } else {
-          diag = this.createDiagonal(sharedX + halfH, top, sharedX - halfH, bottom);
+          diag = this.createDiagonal(sharedX + halfH, diagTop, sharedX - halfH, diagBottom);
         }
 
         // Extend both cells' bounds into the overlap region
@@ -345,23 +351,28 @@ class EdgeGrid {
 
         // Shared horizontal edge position
         const sharedY = top.bottom.rest;
-        const left = top.left.rest;
-        const right = top.right.rest;
-        const width = right - left;
+        const leftX = top.left.rest;
+        const rightX = top.right.rest;
+        const width = rightX - leftX;
 
-        // Limit overlap to prevent triangles (keep it smaller than cell heights)
+        // Limit overlap to prevent triangles
         const topHeight = top.bottom.rest - top.top.rest;
         const bottomHeight = bottom.bottom.rest - bottom.top.rest;
-        const maxOverlap = Math.min(topHeight * 0.4, bottomHeight * 0.4, width * 0.4);
+        const maxOverlap = Math.min(topHeight * 0.35, bottomHeight * 0.35, width * 0.35);
         const halfW = maxOverlap;
+
+        // Diagonal only spans middle portion, not full width
+        const inset = width * 0.15;
+        const diagLeft = leftX + inset;
+        const diagRight = rightX - inset;
 
         const diagonalRight = Math.random() < 0.5;
 
         let diag;
         if (diagonalRight) {
-          diag = this.createDiagonal(left, sharedY - halfW, right, sharedY + halfW);
+          diag = this.createDiagonal(diagLeft, sharedY - halfW, diagRight, sharedY + halfW);
         } else {
-          diag = this.createDiagonal(right, sharedY - halfW, left, sharedY + halfW);
+          diag = this.createDiagonal(diagRight, sharedY - halfW, diagLeft, sharedY + halfW);
         }
 
         // Extend bounds into overlap
