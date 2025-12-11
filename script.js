@@ -311,25 +311,20 @@ class EdgeGrid {
         const bottomY = left.bottom.rest;
         const height = bottomY - topY;
 
-        // Limit overlap to prevent triangles
+        // Smaller overlap to prevent triangles (diagonal spans full height)
         const leftWidth = left.right.rest - left.left.rest;
         const rightWidth = right.right.rest - right.left.rest;
-        const maxOverlap = Math.min(leftWidth * 0.35, rightWidth * 0.35, height * 0.35);
+        const maxOverlap = Math.min(leftWidth * 0.25, rightWidth * 0.25, height * 0.25);
         const halfH = maxOverlap;
-
-        // Diagonal only spans middle portion, not full height
-        // This creates pentagons, not triangles
-        const inset = height * 0.15; // Leave corners intact
-        const diagTop = topY + inset;
-        const diagBottom = bottomY - inset;
 
         const diagonalDown = Math.random() < 0.5;
 
+        // Diagonal spans FULL height (no inset) to avoid clipping artifacts
         let diag;
         if (diagonalDown) {
-          diag = this.createDiagonal(sharedX - halfH, diagTop, sharedX + halfH, diagBottom);
+          diag = this.createDiagonal(sharedX - halfH, topY, sharedX + halfH, bottomY);
         } else {
-          diag = this.createDiagonal(sharedX + halfH, diagTop, sharedX - halfH, diagBottom);
+          diag = this.createDiagonal(sharedX + halfH, topY, sharedX - halfH, bottomY);
         }
 
         // Extend both cells' bounds into the overlap region
@@ -355,24 +350,20 @@ class EdgeGrid {
         const rightX = top.right.rest;
         const width = rightX - leftX;
 
-        // Limit overlap to prevent triangles
+        // Smaller overlap to prevent triangles (diagonal spans full width)
         const topHeight = top.bottom.rest - top.top.rest;
         const bottomHeight = bottom.bottom.rest - bottom.top.rest;
-        const maxOverlap = Math.min(topHeight * 0.35, bottomHeight * 0.35, width * 0.35);
+        const maxOverlap = Math.min(topHeight * 0.25, bottomHeight * 0.25, width * 0.25);
         const halfW = maxOverlap;
-
-        // Diagonal only spans middle portion, not full width
-        const inset = width * 0.15;
-        const diagLeft = leftX + inset;
-        const diagRight = rightX - inset;
 
         const diagonalRight = Math.random() < 0.5;
 
+        // Diagonal spans FULL width (no inset) to avoid clipping artifacts
         let diag;
         if (diagonalRight) {
-          diag = this.createDiagonal(diagLeft, sharedY - halfW, diagRight, sharedY + halfW);
+          diag = this.createDiagonal(leftX, sharedY - halfW, rightX, sharedY + halfW);
         } else {
-          diag = this.createDiagonal(diagRight, sharedY - halfW, diagLeft, sharedY + halfW);
+          diag = this.createDiagonal(rightX, sharedY - halfW, leftX, sharedY + halfW);
         }
 
         // Extend bounds into overlap
