@@ -779,8 +779,8 @@ class BentoGrid {
         ctx.save();
         ctx.clip();
 
-        // Image zoom: zoomed in by default (1.15x), zooms out on hover (1.0x)
-        const defaultZoom = 1.15;
+        // Image zoom: zoomed in by default (1.3x), zooms out on hover (1.0x)
+        const defaultZoom = 1.3;
         const hoverZoom = 1.0;
         const zoom = isHovered ? hoverZoom : defaultZoom;
 
