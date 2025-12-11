@@ -116,7 +116,10 @@ class Cell {
 
     const perpX = -dy / len * halfGap;
     const perpY = dx / len * halfGap;
-    const offsetMult = keepSide === 'positive' ? -1 : 1;
+    // Each cell should be clipped to keep LESS, creating a gap
+    // Positive cell: offset toward positive side (cell keeps less)
+    // Negative cell: offset toward negative side (cell keeps less)
+    const offsetMult = keepSide === 'positive' ? 1 : -1;
 
     const ox1 = diag.x1 + perpX * offsetMult;
     const oy1 = diag.y1 + perpY * offsetMult;
