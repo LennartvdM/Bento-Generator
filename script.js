@@ -310,10 +310,17 @@ class EdgeGrid {
         const topY = left.top.rest;
         const bottomY = left.bottom.rest;
         const height = bottomY - topY;
-
-        // Smaller overlap to prevent triangles (diagonal spans full height)
         const leftWidth = left.right.rest - left.left.rest;
         const rightWidth = right.right.rest - right.left.rest;
+
+        // Skip cells that are too small or too thin (would create "duds")
+        const minDim = 100;
+        const maxAspect = 2.5;
+        if (leftWidth < minDim || rightWidth < minDim || height < minDim) continue;
+        if (leftWidth / height > maxAspect || height / leftWidth > maxAspect) continue;
+        if (rightWidth / height > maxAspect || height / rightWidth > maxAspect) continue;
+
+        // Smaller overlap to prevent triangles (diagonal spans full height)
         const maxOverlap = Math.min(leftWidth * 0.25, rightWidth * 0.25, height * 0.25);
         const halfH = maxOverlap;
 
@@ -349,10 +356,17 @@ class EdgeGrid {
         const leftX = top.left.rest;
         const rightX = top.right.rest;
         const width = rightX - leftX;
-
-        // Smaller overlap to prevent triangles (diagonal spans full width)
         const topHeight = top.bottom.rest - top.top.rest;
         const bottomHeight = bottom.bottom.rest - bottom.top.rest;
+
+        // Skip cells that are too small or too thin (would create "duds")
+        const minDim = 100;
+        const maxAspect = 2.5;
+        if (topHeight < minDim || bottomHeight < minDim || width < minDim) continue;
+        if (width / topHeight > maxAspect || topHeight / width > maxAspect) continue;
+        if (width / bottomHeight > maxAspect || bottomHeight / width > maxAspect) continue;
+
+        // Smaller overlap to prevent triangles (diagonal spans full width)
         const maxOverlap = Math.min(topHeight * 0.25, bottomHeight * 0.25, width * 0.25);
         const halfW = maxOverlap;
 
