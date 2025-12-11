@@ -643,6 +643,7 @@ class BentoGrid {
     this.subdivisionDepth = 5;
     this.minCellSize = 80;
     this.diagonalCount = 0;
+    this.imageZoom = 2.0;
 
     this.grid = null;
     this.physics = null;
@@ -784,8 +785,8 @@ class BentoGrid {
         const maxCellW = cell.restWidth * this.hoverScale;
         const maxCellH = cell.restHeight * this.hoverScale;
 
-        const defaultZoom = 1.3; // Extra zoom in for bleed
-        const hoverZoom = 1.0;   // Fits expanded cell perfectly
+        const defaultZoom = this.imageZoom; // Extra zoom in for bleed
+        const hoverZoom = 1.0;              // Fits expanded cell perfectly
         const zoom = isHovered ? hoverZoom : defaultZoom;
 
         const centerX = (minX + maxX) / 2;
@@ -841,6 +842,7 @@ class BentoGrid {
   setRippleSpeed(v) { if (this.physics) this.physics.rippleSpeed = v; }
   setOvershoot(v) { if (this.physics) this.physics.overshoot = v; }
   setFillRatio(v) { if (this.physics) this.physics.fillRatio = v; }
+  setImageZoom(v) { this.imageZoom = v; }
 
   // Populate cells with random Unsplash images
   populateImages() {
@@ -891,7 +893,8 @@ function init() {
     ripple: { el: 'ripple', handler: v => bentoGrid.setRippleSpeed(+v), format: v => (+v).toFixed(2) },
     overshoot: { el: 'overshoot', handler: v => bentoGrid.setOvershoot(+v), format: v => (+v).toFixed(2) },
     fillRatio: { el: 'fillRatio', handler: v => bentoGrid.setFillRatio(+v), format: v => (+v).toFixed(1) },
-    diagonals: { el: 'diagonals', handler: v => { bentoGrid.setDiagonalCount(+v); bentoGrid.regenerate(); updateMetrics(); }, format: v => v }
+    diagonals: { el: 'diagonals', handler: v => { bentoGrid.setDiagonalCount(+v); bentoGrid.regenerate(); updateMetrics(); }, format: v => v },
+    imageZoom: { el: 'imageZoom', handler: v => bentoGrid.setImageZoom(+v), format: v => (+v).toFixed(1) + 'x' }
   };
 
   for (const [name, ctrl] of Object.entries(controls)) {
