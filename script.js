@@ -448,7 +448,7 @@ class PhysicsEngine {
     this.minSizeRatio = 0.5;
     this.bleedZone = 50;
 
-    this.scaleSpeed = 0.25;
+    this.scaleSpeed = 0.15;
     this.rippleSpeed = 0.10;
     this.overshoot = 0.15;
     this.fillRatio = 0;
@@ -644,12 +644,16 @@ class BentoGrid {
     this.minCellSize = 80;
     this.diagonalCount = 0;
     this.imageZoom = 2.0;
+    this.imageZoomSpeed = 0.15;
 
     this.grid = null;
     this.physics = null;
     this.hoveredCell = null;
     this.canvasOffsetX = 0;
     this.canvasOffsetY = 0;
+
+    // Image zoom animation state
+    this.imageZoomState = new Map(); // cell.id -> current zoom value
 
     this.updateDimensions();
     this.setupEventListeners();
@@ -787,7 +791,17 @@ class BentoGrid {
 
         const defaultZoom = this.imageZoom; // Extra zoom in for bleed
         const hoverZoom = 1.0;              // Fits expanded cell perfectly
-        const zoom = isHovered ? hoverZoom : defaultZoom;
+        const targetZoom = isHovered ? hoverZoom : defaultZoom;
+
+        // Animate image zoom separately from cell expansion
+        if (!this.imageZoomState.has(cell.id)) {
+          this.imageZoomState.set(cell.id, defaultZoom);
+        }
+        let currentZoom = this.imageZoomState.get(cell.id);
+        currentZoom += (targetZoom - currentZoom) * this.imageZoomSpeed;
+        this.imageZoomState.set(cell.id, currentZoom);
+
+        const zoom = currentZoom;
 
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
@@ -843,6 +857,7 @@ class BentoGrid {
   setOvershoot(v) { if (this.physics) this.physics.overshoot = v; }
   setFillRatio(v) { if (this.physics) this.physics.fillRatio = v; }
   setImageZoom(v) { this.imageZoom = v; }
+  setImageZoomSpeed(v) { this.imageZoomSpeed = v; }
 
   // Populate cells with random Unsplash images
   populateImages() {
@@ -894,6 +909,7 @@ function init() {
     overshoot: { el: 'overshoot', handler: v => bentoGrid.setOvershoot(+v), format: v => (+v).toFixed(2) },
     fillRatio: { el: 'fillRatio', handler: v => bentoGrid.setFillRatio(+v), format: v => (+v).toFixed(1) },
     diagonals: { el: 'diagonals', handler: v => { bentoGrid.setDiagonalCount(+v); bentoGrid.regenerate(); updateMetrics(); }, format: v => v },
+    imageZoomSpeed: { el: 'imageZoomSpeed', handler: v => bentoGrid.setImageZoomSpeed(+v), format: v => (+v).toFixed(2) },
     imageZoom: { el: 'imageZoom', handler: v => bentoGrid.setImageZoom(+v), format: v => (+v).toFixed(1) + 'x' }
   };
 
