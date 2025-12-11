@@ -1,6 +1,5 @@
-// Edge-Based Bento Grid
-// Cells are defined by edges, not dimensions
-// When edges move, cells automatically reshape
+// Diagonal-First Bento Grid Generator
+// Diagonals are shared edges between overlapping cells
 
 const PALETTE = [
   '#22d3ee', '#38bdf8', '#60a5fa', '#3b82f6', '#2563eb',
@@ -9,168 +8,191 @@ const PALETTE = [
 ];
 
 // ============================================
-// EDGE-BASED DATA MODEL
+// DIAGONAL EDGE - A shared boundary between cells
 // ============================================
 
-class Edge {
-  constructor(id, position, isHorizontal, isBoundary = false) {
-    this.id = id;
-    this.isHorizontal = isHorizontal;
-    this.isBoundary = isBoundary;
+class DiagonalEdge {
+  constructor(x1, y1, x2, y2) {
+    // Line from point 1 to point 2
+    this.x1 = x1;
+    this.y1 = y1;
+    this.x2 = x2;
+    this.y2 = y2;
 
-    // Physics state
-    this.rest = position;
-    this.pos = position;
-    this.velocity = 0;
-    this.force = 0;
+    // For physics: rest positions and current positions
+    this.restX1 = x1;
+    this.restY1 = y1;
+    this.restX2 = x2;
+    this.restY2 = y2;
+  }
 
-    // Connections to other edges
-    this.connectedEdges = new Set();
+  // Which side of the diagonal is a point on?
+  // Returns positive for one side, negative for other, 0 on line
+  getSide(x, y) {
+    return (this.x2 - this.x1) * (y - this.y1) - (this.y2 - this.y1) * (x - this.x1);
   }
 }
 
+// ============================================
+// CELL - Bounded by edges, optionally clipped by diagonals
+// ============================================
+
 class Cell {
-  constructor(id, topEdge, bottomEdge, leftEdge, rightEdge) {
+  constructor(id, left, top, right, bottom) {
     this.id = id;
-    this.top = topEdge;
-    this.bottom = bottomEdge;
-    this.left = leftEdge;
-    this.right = rightEdge;
     this.color = PALETTE[id % PALETTE.length];
 
-    // Corner cuts: { tl, tr, bl, br } - each is 0 or 0.5 (ratio of dimension)
-    this.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
-    // Which dimension the cut is based on: 'width' or 'height'
-    this.cutDimension = null;
+    // Bounding box (rest positions)
+    this.restLeft = left;
+    this.restTop = top;
+    this.restRight = right;
+    this.restBottom = bottom;
+
+    // Current positions (for physics)
+    this.left = left;
+    this.top = top;
+    this.right = right;
+    this.bottom = bottom;
+
+    // Diagonal clips: { diagonal: DiagonalEdge, keepSide: 'positive' | 'negative' }
+    this.diagonalClips = [];
   }
 
-  get x() { return this.left.pos; }
-  get y() { return this.top.pos; }
-  get width() { return this.right.pos - this.left.pos; }
-  get height() { return this.bottom.pos - this.top.pos; }
+  get width() { return this.right - this.left; }
+  get height() { return this.bottom - this.top; }
+  get restWidth() { return this.restRight - this.restLeft; }
+  get restHeight() { return this.restBottom - this.restTop; }
+  get centerX() { return (this.left + this.right) / 2; }
+  get centerY() { return (this.top + this.bottom) / 2; }
 
-  get restX() { return this.left.rest; }
-  get restY() { return this.top.rest; }
-  get restWidth() { return this.right.rest - this.left.rest; }
-  get restHeight() { return this.bottom.rest - this.top.rest; }
-
-  // Get polygon vertices (clockwise from top-left)
+  // Get polygon vertices after diagonal clipping
   getVertices(gap = 0) {
     const halfGap = gap / 2;
-    const l = this.left.pos + halfGap;
-    const r = this.right.pos - halfGap;
-    const t = this.top.pos + halfGap;
-    const b = this.bottom.pos - halfGap;
-    const w = r - l;
-    const h = b - t;
+    const l = this.left + halfGap;
+    const r = this.right - halfGap;
+    const t = this.top + halfGap;
+    const b = this.bottom - halfGap;
 
-    const vertices = [];
+    // Start with rectangle vertices (clockwise)
+    let vertices = [
+      { x: l, y: t },
+      { x: r, y: t },
+      { x: r, y: b },
+      { x: l, y: b }
+    ];
 
-    // Calculate cut size based on the dimension that was used for the diagonal
-    // 'width' means vertical neighbors (shared horizontal edge) - cut is w/2
-    // 'height' means horizontal neighbors (shared vertical edge) - cut is h/2
-    const getCut = (ratio) => {
-      if (ratio <= 0) return 0;
-      if (this.cutDimension === 'width') {
-        return ratio * w;
-      } else if (this.cutDimension === 'height') {
-        return ratio * h;
-      }
-      return ratio * Math.min(w, h); // fallback
-    };
-
-    // Top-left corner
-    if (this.cuts.tl > 0) {
-      const cut = getCut(this.cuts.tl);
-      vertices.push({ x: l + cut, y: t });
-    } else {
-      vertices.push({ x: l, y: t });
-    }
-
-    // Top-right corner
-    if (this.cuts.tr > 0) {
-      const cut = getCut(this.cuts.tr);
-      vertices.push({ x: r - cut, y: t }); // point on top edge
-      vertices.push({ x: r, y: t + cut }); // point on right edge
-    } else {
-      vertices.push({ x: r, y: t });
-    }
-
-    // Bottom-right corner
-    if (this.cuts.br > 0) {
-      const cut = getCut(this.cuts.br);
-      vertices.push({ x: r, y: b - cut }); // point on right edge
-      vertices.push({ x: r - cut, y: b }); // point on bottom edge
-    } else {
-      vertices.push({ x: r, y: b });
-    }
-
-    // Bottom-left corner
-    if (this.cuts.bl > 0) {
-      const cut = getCut(this.cuts.bl);
-      vertices.push({ x: l + cut, y: b }); // point on bottom edge
-      vertices.push({ x: l, y: b - cut }); // point on left edge
-    } else {
-      vertices.push({ x: l, y: b });
-    }
-
-    // Close top-left if it was cut (need the left edge point)
-    if (this.cuts.tl > 0) {
-      const cut = getCut(this.cuts.tl);
-      vertices.push({ x: l, y: t + cut }); // point on left edge
+    // Clip by each diagonal
+    for (const clip of this.diagonalClips) {
+      vertices = this.clipPolygonByDiagonal(vertices, clip.diagonal, clip.keepSide, gap);
     }
 
     return vertices;
   }
 
+  // Sutherland-Hodgman style clipping
+  clipPolygonByDiagonal(vertices, diagonal, keepSide, gap) {
+    if (vertices.length < 3) return vertices;
+
+    const halfGap = gap / 2;
+
+    // Offset the diagonal line by half gap to create visual separation
+    // Calculate perpendicular offset direction
+    const dx = diagonal.x2 - diagonal.x1;
+    const dy = diagonal.y2 - diagonal.y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    const perpX = -dy / len * halfGap;
+    const perpY = dx / len * halfGap;
+
+    // Offset diagonal based on which side we're keeping
+    const offsetMult = keepSide === 'positive' ? -1 : 1;
+    const ox1 = diagonal.x1 + perpX * offsetMult;
+    const oy1 = diagonal.y1 + perpY * offsetMult;
+    const ox2 = diagonal.x2 + perpX * offsetMult;
+    const oy2 = diagonal.y2 + perpY * offsetMult;
+
+    const result = [];
+
+    for (let i = 0; i < vertices.length; i++) {
+      const curr = vertices[i];
+      const next = vertices[(i + 1) % vertices.length];
+
+      const currSide = (ox2 - ox1) * (curr.y - oy1) - (oy2 - oy1) * (curr.x - ox1);
+      const nextSide = (ox2 - ox1) * (next.y - oy1) - (oy2 - oy1) * (next.x - ox1);
+
+      const currInside = keepSide === 'positive' ? currSide >= 0 : currSide <= 0;
+      const nextInside = keepSide === 'positive' ? nextSide >= 0 : nextSide <= 0;
+
+      if (currInside) {
+        result.push(curr);
+      }
+
+      // If edge crosses the diagonal, add intersection point
+      if (currInside !== nextInside) {
+        const intersection = this.lineIntersection(
+          curr.x, curr.y, next.x, next.y,
+          ox1, oy1, ox2, oy2
+        );
+        if (intersection) {
+          result.push(intersection);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  lineIntersection(x1, y1, x2, y2, x3, y3, x4, y4) {
+    const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(denom) < 0.0001) return null;
+
+    const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+
+    return {
+      x: x1 + t * (x2 - x1),
+      y: y1 + t * (y2 - y1)
+    };
+  }
+
   containsPoint(px, py) {
-    // Simple bounding box check (could be improved for cut corners)
-    return px >= this.x && px <= this.x + this.width &&
-           py >= this.y && py <= this.y + this.height;
+    // Simple bounding box check
+    return px >= this.left && px <= this.right &&
+           py >= this.top && py <= this.bottom;
   }
 }
 
 // ============================================
-// TREEMAP SUBDIVISION
+// GRID GENERATOR WITH DIAGONAL SUPPORT
 // ============================================
 
-class EdgeGrid {
-  constructor(width, height, gap) {
+class BentoGenerator {
+  constructor(width, height) {
     this.width = width;
     this.height = height;
-    this.gap = gap;
-
-    this.edges = new Map();
     this.cells = [];
-    this.edgeIdCounter = 0;
-
-    // Create boundary edges (soft - can flex outward)
-    this.topBoundary = this.createEdge(0, true, true);
-    this.bottomBoundary = this.createEdge(height, true, true);
-    this.leftBoundary = this.createEdge(0, false, true);
-    this.rightBoundary = this.createEdge(width, false, true);
+    this.diagonals = [];
+    this.cellIdCounter = 0;
   }
 
-  createEdge(position, isHorizontal, isBoundary = false) {
-    const id = `e${this.edgeIdCounter++}`;
-    const edge = new Edge(id, position, isHorizontal, isBoundary);
-    this.edges.set(id, edge);
-    return edge;
+  generate(depth = 5, minSize = 60, diagonalChance = 0) {
+    this.cells = [];
+    this.diagonals = [];
+    this.cellIdCounter = 0;
+
+    this.subdivide(0, 0, this.width, this.height, depth, minSize, diagonalChance);
   }
 
-  subdivide(topEdge, bottomEdge, leftEdge, rightEdge, depth, minSize) {
-    const width = rightEdge.rest - leftEdge.rest;
-    const height = bottomEdge.rest - topEdge.rest;
+  subdivide(left, top, right, bottom, depth, minSize, diagonalChance) {
+    const width = right - left;
+    const height = bottom - top;
 
+    // Base case: create a cell
     if (depth <= 0 || (width < minSize * 2 && height < minSize * 2)) {
-      const cell = new Cell(
-        this.cells.length,
-        topEdge, bottomEdge, leftEdge, rightEdge
-      );
+      const cell = new Cell(this.cellIdCounter++, left, top, right, bottom);
       this.cells.push(cell);
-      return;
+      return [cell];
     }
 
+    // Decide split direction based on aspect ratio
     const aspectRatio = width / height;
     let splitHorizontal;
 
@@ -185,214 +207,127 @@ class EdgeGrid {
 
     const splitRatio = 0.3 + Math.random() * 0.4;
 
-    if (splitHorizontal) {
-      const splitY = topEdge.rest + (bottomEdge.rest - topEdge.rest) * splitRatio;
-      const splitEdge = this.createEdge(splitY, true, false);
+    // Decide if this split should be diagonal
+    const useDiagonal = Math.random() < diagonalChance && depth > 1;
 
-      splitEdge.connectedEdges.add(leftEdge.id);
-      splitEdge.connectedEdges.add(rightEdge.id);
-      leftEdge.connectedEdges.add(splitEdge.id);
-      rightEdge.connectedEdges.add(splitEdge.id);
-
-      this.subdivide(topEdge, splitEdge, leftEdge, rightEdge, depth - 1, minSize);
-      this.subdivide(splitEdge, bottomEdge, leftEdge, rightEdge, depth - 1, minSize);
+    if (useDiagonal) {
+      return this.diagonalSplit(left, top, right, bottom, depth, minSize, diagonalChance, splitHorizontal, splitRatio);
     } else {
-      const splitX = leftEdge.rest + (rightEdge.rest - leftEdge.rest) * splitRatio;
-      const splitEdge = this.createEdge(splitX, false, false);
-
-      splitEdge.connectedEdges.add(topEdge.id);
-      splitEdge.connectedEdges.add(bottomEdge.id);
-      topEdge.connectedEdges.add(splitEdge.id);
-      bottomEdge.connectedEdges.add(splitEdge.id);
-
-      this.subdivide(topEdge, bottomEdge, leftEdge, splitEdge, depth - 1, minSize);
-      this.subdivide(topEdge, bottomEdge, splitEdge, rightEdge, depth - 1, minSize);
+      return this.straightSplit(left, top, right, bottom, depth, minSize, diagonalChance, splitHorizontal, splitRatio);
     }
   }
 
-  generate(subdivisionDepth = 5, minCellSize = 60) {
-    this.cells = [];
-
-    const boundaryIds = new Set([
-      this.topBoundary.id, this.bottomBoundary.id,
-      this.leftBoundary.id, this.rightBoundary.id
-    ]);
-
-    for (const [id] of this.edges) {
-      if (!boundaryIds.has(id)) {
-        this.edges.delete(id);
-      }
+  straightSplit(left, top, right, bottom, depth, minSize, diagonalChance, splitHorizontal, splitRatio) {
+    if (splitHorizontal) {
+      const splitY = top + (bottom - top) * splitRatio;
+      const topCells = this.subdivide(left, top, right, splitY, depth - 1, minSize, diagonalChance);
+      const bottomCells = this.subdivide(left, splitY, right, bottom, depth - 1, minSize, diagonalChance);
+      return [...topCells, ...bottomCells];
+    } else {
+      const splitX = left + (right - left) * splitRatio;
+      const leftCells = this.subdivide(left, top, splitX, bottom, depth - 1, minSize, diagonalChance);
+      const rightCells = this.subdivide(splitX, top, right, bottom, depth - 1, minSize, diagonalChance);
+      return [...leftCells, ...rightCells];
     }
-
-    this.topBoundary.connectedEdges.clear();
-    this.bottomBoundary.connectedEdges.clear();
-    this.leftBoundary.connectedEdges.clear();
-    this.rightBoundary.connectedEdges.clear();
-
-    this.subdivide(
-      this.topBoundary, this.bottomBoundary,
-      this.leftBoundary, this.rightBoundary,
-      subdivisionDepth, minCellSize
-    );
   }
 
-  // Add diagonal cuts - slices that run across two aligned adjacent cells
-  addDiagonals(count) {
-    if (count <= 0) return;
+  diagonalSplit(left, top, right, bottom, depth, minSize, diagonalChance, splitHorizontal, splitRatio) {
+    const width = right - left;
+    const height = bottom - top;
 
-    // Reset all cuts
-    for (const cell of this.cells) {
-      cell.cuts = { tl: 0, tr: 0, bl: 0, br: 0 };
-      cell.cutDimension = null;
-    }
+    // For diagonal splits, we create two cells that OVERLAP
+    // The diagonal line cuts through the overlap
 
-    // Find pairs of adjacent cells that share a full edge and are aligned
-    const diagonalCandidates = [];
+    if (splitHorizontal) {
+      // Splitting horizontally with diagonal
+      // Top cell and bottom cell will overlap, diagonal separates them
+      const splitY = top + (bottom - top) * splitRatio;
+      const overlapSize = Math.min(width, height) * 0.5; // Overlap region
 
-    for (let i = 0; i < this.cells.length; i++) {
-      for (let j = i + 1; j < this.cells.length; j++) {
-        const a = this.cells[i];
-        const b = this.cells[j];
+      // Diagonal direction: randomly choose
+      const diagonalDown = Math.random() < 0.5;
 
-        // Check for horizontal neighbors (share a vertical edge)
-        // They must have matching top AND bottom (same height, aligned)
-        if (a.right === b.left &&
-            Math.abs(a.top.rest - b.top.rest) < 1 &&
-            Math.abs(a.bottom.rest - b.bottom.rest) < 1) {
-          // a is left of b - diagonal can go either direction
-          diagonalCandidates.push({
-            type: 'horizontal',
-            left: a,
-            right: b,
-            direction: Math.random() < 0.5 ? 'down' : 'up' // top-right to bottom-left, or vice versa
-          });
-        }
-        else if (b.right === a.left &&
-                 Math.abs(a.top.rest - b.top.rest) < 1 &&
-                 Math.abs(a.bottom.rest - b.bottom.rest) < 1) {
-          // b is left of a
-          diagonalCandidates.push({
-            type: 'horizontal',
-            left: b,
-            right: a,
-            direction: Math.random() < 0.5 ? 'down' : 'up'
-          });
-        }
-
-        // Check for vertical neighbors (share a horizontal edge)
-        // They must have matching left AND right (same width, aligned)
-        if (a.bottom === b.top &&
-            Math.abs(a.left.rest - b.left.rest) < 1 &&
-            Math.abs(a.right.rest - b.right.rest) < 1) {
-          // a is above b
-          diagonalCandidates.push({
-            type: 'vertical',
-            top: a,
-            bottom: b,
-            direction: Math.random() < 0.5 ? 'right' : 'left' // bottom-left to top-right, or vice versa
-          });
-        }
-        else if (b.bottom === a.top &&
-                 Math.abs(a.left.rest - b.left.rest) < 1 &&
-                 Math.abs(a.right.rest - b.right.rest) < 1) {
-          // b is above a
-          diagonalCandidates.push({
-            type: 'vertical',
-            top: b,
-            bottom: a,
-            direction: Math.random() < 0.5 ? 'right' : 'left'
-          });
-        }
+      // Create diagonal edge
+      let diagonal;
+      if (diagonalDown) {
+        // Diagonal from top-left to bottom-right of overlap region
+        diagonal = new DiagonalEdge(left, splitY - overlapSize/2, right, splitY + overlapSize/2);
+      } else {
+        // Diagonal from top-right to bottom-left
+        diagonal = new DiagonalEdge(right, splitY - overlapSize/2, left, splitY + overlapSize/2);
       }
-    }
+      this.diagonals.push(diagonal);
 
-    // Shuffle and pick requested number
-    const shuffled = diagonalCandidates.sort(() => Math.random() - 0.5);
-    const toApply = shuffled.slice(0, Math.min(count, shuffled.length));
+      // Top region: extends down into overlap, clipped by diagonal
+      const topCell = new Cell(this.cellIdCounter++, left, top, right, splitY + overlapSize/2);
+      topCell.diagonalClips.push({ diagonal, keepSide: 'positive' });
 
-    // Track which cells already have cuts to avoid conflicts
-    const cellsWithCuts = new Set();
+      // Bottom region: extends up into overlap, clipped by diagonal
+      const bottomCell = new Cell(this.cellIdCounter++, left, splitY - overlapSize/2, right, bottom);
+      bottomCell.diagonalClips.push({ diagonal, keepSide: 'negative' });
 
-    // Cut ratio of 0.5 = cut extends to midpoint of the relevant dimension
-    const cutRatio = 0.5;
+      this.cells.push(topCell, bottomCell);
+      return [topCell, bottomCell];
 
-    for (const diag of toApply) {
-      if (diag.type === 'horizontal') {
-        // Skip if either cell already has a cut
-        if (cellsWithCuts.has(diag.left) || cellsWithCuts.has(diag.right)) continue;
+    } else {
+      // Splitting vertically with diagonal
+      const splitX = left + (right - left) * splitRatio;
+      const overlapSize = Math.min(width, height) * 0.5;
 
-        // For horizontal neighbors, the shared edge is vertical
-        // Cut is based on height (h/2) so diagonals meet at midpoint
-        if (diag.direction === 'down') {
-          // Diagonal goes from top-right of left cell to bottom-left of right cell
-          diag.left.cuts.tr = cutRatio;
-          diag.right.cuts.bl = cutRatio;
-        } else {
-          // Diagonal goes from bottom-right of left cell to top-left of right cell
-          diag.left.cuts.br = cutRatio;
-          diag.right.cuts.tl = cutRatio;
-        }
-        diag.left.cutDimension = 'height';
-        diag.right.cutDimension = 'height';
-        cellsWithCuts.add(diag.left);
-        cellsWithCuts.add(diag.right);
+      const diagonalDown = Math.random() < 0.5;
+
+      let diagonal;
+      if (diagonalDown) {
+        // Diagonal from top-left to bottom-right
+        diagonal = new DiagonalEdge(splitX - overlapSize/2, top, splitX + overlapSize/2, bottom);
+      } else {
+        // Diagonal from bottom-left to top-right
+        diagonal = new DiagonalEdge(splitX - overlapSize/2, bottom, splitX + overlapSize/2, top);
       }
-      else if (diag.type === 'vertical') {
-        // Skip if either cell already has a cut
-        if (cellsWithCuts.has(diag.top) || cellsWithCuts.has(diag.bottom)) continue;
+      this.diagonals.push(diagonal);
 
-        // For vertical neighbors, the shared edge is horizontal
-        // Cut is based on width (w/2) so diagonals meet at midpoint
-        if (diag.direction === 'right') {
-          // Diagonal goes from bottom-left of top cell to top-right of bottom cell
-          diag.top.cuts.bl = cutRatio;
-          diag.bottom.cuts.tr = cutRatio;
-        } else {
-          // Diagonal goes from bottom-right of top cell to top-left of bottom cell
-          diag.top.cuts.br = cutRatio;
-          diag.bottom.cuts.tl = cutRatio;
-        }
-        diag.top.cutDimension = 'width';
-        diag.bottom.cutDimension = 'width';
-        cellsWithCuts.add(diag.top);
-        cellsWithCuts.add(diag.bottom);
-      }
+      // Left region: extends right into overlap
+      const leftCell = new Cell(this.cellIdCounter++, left, top, splitX + overlapSize/2, bottom);
+      leftCell.diagonalClips.push({ diagonal, keepSide: 'positive' });
+
+      // Right region: extends left into overlap
+      const rightCell = new Cell(this.cellIdCounter++, splitX - overlapSize/2, top, right, bottom);
+      rightCell.diagonalClips.push({ diagonal, keepSide: 'negative' });
+
+      this.cells.push(leftCell, rightCell);
+      return [leftCell, rightCell];
     }
   }
 }
 
 // ============================================
-// SPRING PHYSICS ENGINE WITH INCOMPRESSIBILITY
+// PHYSICS ENGINE
 // ============================================
 
 class PhysicsEngine {
-  constructor(edgeGrid) {
-    this.grid = edgeGrid;
+  constructor(generator) {
+    this.generator = generator;
     this.hoveredCell = null;
     this.hoverScale = 1;
 
-    // Track which edges belong to hovered cell (they have priority)
-    this.hoveredEdges = new Set();
-
-    // Physics parameters (exposed to UI)
-    this.springStrength = 0.12;
+    // Physics parameters
+    this.springStrength = 0.15;
+    this.damping = 0.85;
     this.incompressibility = 0.7;
     this.minSizeRatio = 0.5;
     this.bleedZone = 50;
-    this.boundaryResistance = 0.8;
 
-    // Animation parameters (exposed to UI)
-    this.scaleSpeed = 0.25;      // How fast hovered cell expands
-    this.rippleSpeed = 0.10;     // How fast neighbors respond to forces
-    this.overshoot = 0.15;       // Bounciness (0 = critically damped, 0.5 = very bouncy)
-    this.fillRatio = 0;          // Counter aspect ratio: flat shapes grow tall, tall shapes grow wide
+    // Animation parameters
+    this.scaleSpeed = 0.25;
+    this.rippleSpeed = 0.10;
+    this.overshoot = 0.15;
+    this.fillRatio = 0;
 
-    this.rippleIterations = 3;
-  }
-
-  // Damping derived from overshoot (more overshoot = less damping)
-  get damping() {
-    return 0.92 - this.overshoot * 0.3;
+    // Velocity for each cell
+    this.velocities = new Map();
+    for (const cell of generator.cells) {
+      this.velocities.set(cell, { left: 0, top: 0, right: 0, bottom: 0 });
+    }
   }
 
   applyHoverForce(cell, scale) {
@@ -400,242 +335,120 @@ class PhysicsEngine {
     this.hoveredCell = cell;
     this.hoverScale = scale;
 
-    // Mark hovered cell's edges
-    this.hoveredEdges.clear();
-    this.hoveredEdges.add(cell.top);
-    this.hoveredEdges.add(cell.bottom);
-    this.hoveredEdges.add(cell.left);
-    this.hoveredEdges.add(cell.right);
+    // Calculate target size
+    const restW = cell.restWidth;
+    const restH = cell.restHeight;
+    const cx = cell.restLeft + restW / 2;
+    const cy = cell.restTop + restH / 2;
 
-    // Calculate target positions for hovered cell's edges
-    const cx = cell.restX + cell.restWidth / 2;
-    const cy = cell.restY + cell.restHeight / 2;
-
-    // Apply fill ratio: counteract aspect ratio
-    // Flat shapes (aspect > 1) grow more vertically
-    // Tall shapes (aspect < 1) grow more horizontally
-    const aspect = cell.restWidth / cell.restHeight;
+    // Apply fill ratio (counter aspect ratio)
+    const aspect = restW / restH;
     let scaleX = scale;
     let scaleY = scale;
 
     if (this.fillRatio > 0) {
       if (aspect > 1) {
-        // Wide/flat shape - boost vertical scaling
-        const boost = 1 + (aspect - 1) * this.fillRatio;
-        scaleY = 1 + (scale - 1) * boost;
+        scaleY = 1 + (scale - 1) * (1 + (aspect - 1) * this.fillRatio);
       } else if (aspect < 1) {
-        // Tall shape - boost horizontal scaling
-        const boost = 1 + (1 / aspect - 1) * this.fillRatio;
-        scaleX = 1 + (scale - 1) * boost;
+        scaleX = 1 + (scale - 1) * (1 + (1/aspect - 1) * this.fillRatio);
       }
     }
 
-    const targetHalfW = (cell.restWidth * scaleX) / 2;
-    const targetHalfH = (cell.restHeight * scaleY) / 2;
+    const targetW = restW * scaleX;
+    const targetH = restH * scaleY;
 
-    // Move hovered edges DIRECTLY toward targets (authoritative, no fighting)
-    if (!cell.top.isBoundary) {
-      const targetY = cy - targetHalfH;
-      cell.top.pos += (targetY - cell.top.pos) * this.scaleSpeed;
-      cell.top.velocity = 0;
-    }
-    if (!cell.bottom.isBoundary) {
-      const targetY = cy + targetHalfH;
-      cell.bottom.pos += (targetY - cell.bottom.pos) * this.scaleSpeed;
-      cell.bottom.velocity = 0;
-    }
-    if (!cell.left.isBoundary) {
-      const targetX = cx - targetHalfW;
-      cell.left.pos += (targetX - cell.left.pos) * this.scaleSpeed;
-      cell.left.velocity = 0;
-    }
-    if (!cell.right.isBoundary) {
-      const targetX = cx + targetHalfW;
-      cell.right.pos += (targetX - cell.right.pos) * this.scaleSpeed;
-      cell.right.velocity = 0;
-    }
-  }
-
-  applyIncompressibility() {
-    if (!this.hoveredCell) return;
-
-    // Get hover cell center for directional reference
-    const hoverCx = this.hoveredCell.restX + this.hoveredCell.restWidth / 2;
-    const hoverCy = this.hoveredCell.restY + this.hoveredCell.restHeight / 2;
-
-    for (const cell of this.grid.cells) {
-      if (cell === this.hoveredCell) continue;
-
-      const widthRatio = cell.width / cell.restWidth;
-      const heightRatio = cell.height / cell.restHeight;
-
-      // Cell center for direction calculation
-      const cellCx = cell.restX + cell.restWidth / 2;
-      const cellCy = cell.restY + cell.restHeight / 2;
-
-      // Direction FROM hover TO this cell (this is the allowed push direction)
-      const dirX = cellCx - hoverCx;
-      const dirY = cellCy - hoverCy;
-
-      // Hard limit: push back strongly when below minimum
-      if (widthRatio < this.minSizeRatio) {
-        const deficit = cell.restWidth * this.minSizeRatio - cell.width;
-        const force = deficit * this.incompressibility * 1.5;
-
-        // Only push edges in the direction AWAY from hover
-        if (!this.hoveredEdges.has(cell.left)) {
-          // Left edge can only move left (negative) if cell is left of hover
-          if (dirX < 0) cell.left.force -= force;
-        }
-        if (!this.hoveredEdges.has(cell.right)) {
-          // Right edge can only move right (positive) if cell is right of hover
-          if (dirX > 0) cell.right.force += force;
-        }
-        // If neither direction works, allow both (edge case)
-        if (dirX === 0) {
-          if (!this.hoveredEdges.has(cell.left)) cell.left.force -= force * 0.5;
-          if (!this.hoveredEdges.has(cell.right)) cell.right.force += force * 0.5;
-        }
-      }
-
-      if (heightRatio < this.minSizeRatio) {
-        const deficit = cell.restHeight * this.minSizeRatio - cell.height;
-        const force = deficit * this.incompressibility * 1.5;
-
-        if (!this.hoveredEdges.has(cell.top)) {
-          if (dirY < 0) cell.top.force -= force;
-        }
-        if (!this.hoveredEdges.has(cell.bottom)) {
-          if (dirY > 0) cell.bottom.force += force;
-        }
-        if (dirY === 0) {
-          if (!this.hoveredEdges.has(cell.top)) cell.top.force -= force * 0.5;
-          if (!this.hoveredEdges.has(cell.bottom)) cell.bottom.force += force * 0.5;
-        }
-      }
-
-      // Soft resistance (same directional logic)
-      if (widthRatio < 1.0) {
-        const compression = 1.0 - widthRatio;
-        const softForce = compression * cell.restWidth * this.incompressibility * 0.4;
-
-        if (!this.hoveredEdges.has(cell.left) && dirX <= 0) {
-          cell.left.force -= softForce;
-        }
-        if (!this.hoveredEdges.has(cell.right) && dirX >= 0) {
-          cell.right.force += softForce;
-        }
-      }
-
-      if (heightRatio < 1.0) {
-        const compression = 1.0 - heightRatio;
-        const softForce = compression * cell.restHeight * this.incompressibility * 0.4;
-
-        if (!this.hoveredEdges.has(cell.top) && dirY <= 0) {
-          cell.top.force -= softForce;
-        }
-        if (!this.hoveredEdges.has(cell.bottom) && dirY >= 0) {
-          cell.bottom.force += softForce;
-        }
-      }
-    }
-  }
-
-  integrateForces() {
-    for (const [, edge] of this.grid.edges) {
-      // Skip hovered cell's edges - they move directly, not through forces
-      if (this.hoveredEdges.has(edge)) {
-        edge.force = 0;
-        continue;
-      }
-
-      // Boundaries use stronger spring to resist movement
-      const springMult = edge.isBoundary ? this.boundaryResistance * 3 : 1;
-      const springForce = (edge.rest - edge.pos) * this.springStrength * springMult;
-
-      const totalForce = edge.force + springForce;
-
-      edge.velocity += totalForce * this.rippleSpeed;
-      edge.velocity *= this.damping;
-      edge.pos += edge.velocity;
-
-      // Clamp boundaries to bleed zone
-      if (edge.isBoundary) {
-        if (edge === this.grid.topBoundary) {
-          edge.pos = Math.max(edge.rest - this.bleedZone, Math.min(edge.rest, edge.pos));
-        } else if (edge === this.grid.bottomBoundary) {
-          edge.pos = Math.min(edge.rest + this.bleedZone, Math.max(edge.rest, edge.pos));
-        } else if (edge === this.grid.leftBoundary) {
-          edge.pos = Math.max(edge.rest - this.bleedZone, Math.min(edge.rest, edge.pos));
-        } else if (edge === this.grid.rightBoundary) {
-          edge.pos = Math.min(edge.rest + this.bleedZone, Math.max(edge.rest, edge.pos));
-        }
-
-        if (Math.abs(edge.pos - edge.rest) >= this.bleedZone * 0.95) {
-          edge.velocity *= 0.3;
-        }
-      } else {
-        const maxDisp = 200;
-        const disp = edge.pos - edge.rest;
-        if (Math.abs(disp) > maxDisp) {
-          edge.pos = edge.rest + Math.sign(disp) * maxDisp;
-          edge.velocity *= 0.3;
-        }
-      }
-
-      edge.force = 0;
-    }
-  }
-
-  enforceConstraints() {
-    const minCellSize = 20;
-
-    for (const cell of this.grid.cells) {
-      // Don't constrain hovered cell
-      if (cell === this.hoveredCell) continue;
-
-      if (cell.width < minCellSize) {
-        const mid = (cell.left.pos + cell.right.pos) / 2;
-        if (!cell.left.isBoundary && !this.hoveredEdges.has(cell.left)) {
-          cell.left.pos = mid - minCellSize / 2;
-        }
-        if (!cell.right.isBoundary && !this.hoveredEdges.has(cell.right)) {
-          cell.right.pos = mid + minCellSize / 2;
-        }
-      }
-
-      if (cell.height < minCellSize) {
-        const mid = (cell.top.pos + cell.bottom.pos) / 2;
-        if (!cell.top.isBoundary && !this.hoveredEdges.has(cell.top)) {
-          cell.top.pos = mid - minCellSize / 2;
-        }
-        if (!cell.bottom.isBoundary && !this.hoveredEdges.has(cell.bottom)) {
-          cell.bottom.pos = mid + minCellSize / 2;
-        }
-      }
-    }
+    // Move hovered cell toward target
+    cell.left += ((cx - targetW/2) - cell.left) * this.scaleSpeed;
+    cell.right += ((cx + targetW/2) - cell.right) * this.scaleSpeed;
+    cell.top += ((cy - targetH/2) - cell.top) * this.scaleSpeed;
+    cell.bottom += ((cy + targetH/2) - cell.bottom) * this.scaleSpeed;
   }
 
   update() {
-    for (let i = 0; i < this.rippleIterations; i++) {
-      this.applyIncompressibility();
-      this.integrateForces();
+    const cells = this.generator.cells;
+
+    // Apply spring forces to return to rest
+    for (const cell of cells) {
+      if (cell === this.hoveredCell) continue;
+
+      const vel = this.velocities.get(cell);
+
+      // Spring back to rest position
+      vel.left += (cell.restLeft - cell.left) * this.springStrength * this.rippleSpeed;
+      vel.top += (cell.restTop - cell.top) * this.springStrength * this.rippleSpeed;
+      vel.right += (cell.restRight - cell.right) * this.springStrength * this.rippleSpeed;
+      vel.bottom += (cell.restBottom - cell.bottom) * this.springStrength * this.rippleSpeed;
+
+      // Damping
+      const dampFactor = this.damping - this.overshoot * 0.3;
+      vel.left *= dampFactor;
+      vel.top *= dampFactor;
+      vel.right *= dampFactor;
+      vel.bottom *= dampFactor;
+
+      // Apply velocity
+      cell.left += vel.left;
+      cell.top += vel.top;
+      cell.right += vel.right;
+      cell.bottom += vel.bottom;
     }
-    this.enforceConstraints();
+
+    // Simple incompressibility: push neighbors away from hovered cell
+    if (this.hoveredCell) {
+      const hovered = this.hoveredCell;
+      const hoverCx = hovered.restLeft + hovered.restWidth / 2;
+      const hoverCy = hovered.restTop + hovered.restHeight / 2;
+
+      for (const cell of cells) {
+        if (cell === hovered) continue;
+
+        const cellCx = cell.restLeft + cell.restWidth / 2;
+        const cellCy = cell.restTop + cell.restHeight / 2;
+
+        // Direction from hover to this cell
+        const dx = cellCx - hoverCx;
+        const dy = cellCy - hoverCy;
+
+        // Check for overlap and push away
+        const overlapX = Math.min(hovered.right, cell.right) - Math.max(hovered.left, cell.left);
+        const overlapY = Math.min(hovered.bottom, cell.bottom) - Math.max(hovered.top, cell.top);
+
+        if (overlapX > 0 && overlapY > 0) {
+          const pushStrength = this.incompressibility * 0.5;
+
+          if (dx > 0) {
+            cell.left += overlapX * pushStrength;
+            cell.right += overlapX * pushStrength;
+          } else if (dx < 0) {
+            cell.left -= overlapX * pushStrength;
+            cell.right -= overlapX * pushStrength;
+          }
+
+          if (dy > 0) {
+            cell.top += overlapY * pushStrength;
+            cell.bottom += overlapY * pushStrength;
+          } else if (dy < 0) {
+            cell.top -= overlapY * pushStrength;
+            cell.bottom -= overlapY * pushStrength;
+          }
+        }
+      }
+    }
   }
 
   clearHover() {
     this.hoveredCell = null;
     this.hoverScale = 1;
-    this.hoveredEdges.clear();
   }
 
   reset() {
     this.clearHover();
-    for (const [, edge] of this.grid.edges) {
-      edge.pos = edge.rest;
-      edge.velocity = 0;
-      edge.force = 0;
+    for (const cell of this.generator.cells) {
+      cell.left = cell.restLeft;
+      cell.top = cell.restTop;
+      cell.right = cell.restRight;
+      cell.bottom = cell.restBottom;
+      this.velocities.set(cell, { left: 0, top: 0, right: 0, bottom: 0 });
     }
   }
 }
@@ -656,10 +469,10 @@ class BentoGrid {
     this.hoverScale = 1.4;
     this.subdivisionDepth = 5;
     this.minCellSize = 80;
-    this.diagonalCount = 0;
+    this.diagonalChance = 0; // 0 to 1
 
     // State
-    this.edgeGrid = null;
+    this.generator = null;
     this.physics = null;
     this.hoveredCell = null;
     this.canvasOffsetX = 0;
@@ -700,7 +513,7 @@ class BentoGrid {
       const my = e.clientY - rect.top - this.canvasOffsetY;
 
       this.hoveredCell = null;
-      for (const cell of this.edgeGrid.cells) {
+      for (const cell of this.generator.cells) {
         if (cell.containsPoint(mx, my)) {
           this.hoveredCell = cell;
           break;
@@ -714,10 +527,9 @@ class BentoGrid {
   }
 
   regenerate() {
-    this.edgeGrid = new EdgeGrid(this.width, this.height, this.gap);
-    this.edgeGrid.generate(this.subdivisionDepth, this.minCellSize);
-    this.edgeGrid.addDiagonals(this.diagonalCount);
-    this.physics = new PhysicsEngine(this.edgeGrid);
+    this.generator = new BentoGenerator(this.width, this.height);
+    this.generator.generate(this.subdivisionDepth, this.minCellSize, this.diagonalChance);
+    this.physics = new PhysicsEngine(this.generator);
     this.physics.reset();
   }
 
@@ -745,11 +557,10 @@ class BentoGrid {
     ctx.save();
     ctx.translate(this.canvasOffsetX, this.canvasOffsetY);
 
-    const gap = this.gap;
     const radius = 6;
 
-    for (const cell of this.edgeGrid.cells) {
-      const vertices = cell.getVertices(gap);
+    for (const cell of this.generator.cells) {
+      const vertices = cell.getVertices(this.gap);
       if (vertices.length < 3) continue;
 
       // Bounding box for outside check
@@ -767,43 +578,7 @@ class BentoGrid {
       ctx.globalAlpha = isOutside ? 0.5 : 0.9;
 
       // Draw polygon with rounded corners
-      ctx.beginPath();
-      const n = vertices.length;
-      for (let i = 0; i < n; i++) {
-        const curr = vertices[i];
-        const next = vertices[(i + 1) % n];
-
-        // Vector to next vertex
-        const dx = next.x - curr.x;
-        const dy = next.y - curr.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-
-        // Use smaller radius for short edges
-        const r = Math.min(radius, len / 3);
-
-        if (i === 0) {
-          // Move to first point (offset by radius toward next)
-          ctx.moveTo(curr.x + (dx / len) * r, curr.y + (dy / len) * r);
-        }
-
-        // Line to just before next corner
-        const endX = next.x - (dx / len) * r;
-        const endY = next.y - (dy / len) * r;
-        ctx.lineTo(endX, endY);
-
-        // Rounded corner at next vertex
-        const afterNext = vertices[(i + 2) % n];
-        const dx2 = afterNext.x - next.x;
-        const dy2 = afterNext.y - next.y;
-        const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-        const r2 = Math.min(radius, len2 / 3);
-
-        const cornerEndX = next.x + (dx2 / len2) * r2;
-        const cornerEndY = next.y + (dy2 / len2) * r2;
-
-        ctx.quadraticCurveTo(next.x, next.y, cornerEndX, cornerEndY);
-      }
-      ctx.closePath();
+      this.drawRoundedPolygon(ctx, vertices, radius);
 
       ctx.fill();
 
@@ -816,18 +591,53 @@ class BentoGrid {
     ctx.globalAlpha = 1;
   }
 
-  // Public API
-  getShapeCount() {
-    return this.edgeGrid ? this.edgeGrid.cells.length : 0;
+  drawRoundedPolygon(ctx, vertices, radius) {
+    ctx.beginPath();
+    const n = vertices.length;
+
+    for (let i = 0; i < n; i++) {
+      const curr = vertices[i];
+      const next = vertices[(i + 1) % n];
+
+      const dx = next.x - curr.x;
+      const dy = next.y - curr.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+
+      const r = Math.min(radius, len / 3);
+
+      if (i === 0) {
+        ctx.moveTo(curr.x + (dx / len) * r, curr.y + (dy / len) * r);
+      }
+
+      const endX = next.x - (dx / len) * r;
+      const endY = next.y - (dy / len) * r;
+      ctx.lineTo(endX, endY);
+
+      const afterNext = vertices[(i + 2) % n];
+      const dx2 = afterNext.x - next.x;
+      const dy2 = afterNext.y - next.y;
+      const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+      const r2 = Math.min(radius, len2 / 3);
+
+      const cornerEndX = next.x + (dx2 / len2) * r2;
+      const cornerEndY = next.y + (dy2 / len2) * r2;
+
+      ctx.quadraticCurveTo(next.x, next.y, cornerEndX, cornerEndY);
+    }
+    ctx.closePath();
   }
 
-  getEdgeCount() {
-    return this.edgeGrid ? this.edgeGrid.edges.size : 0;
+  // Public API
+  getShapeCount() {
+    return this.generator ? this.generator.cells.length : 0;
+  }
+
+  getDiagonalCount() {
+    return this.generator ? this.generator.diagonals.length : 0;
   }
 
   setGap(gap) {
     this.gap = gap;
-    if (this.edgeGrid) this.edgeGrid.gap = gap;
   }
 
   setHoverScale(scale) {
@@ -836,6 +646,11 @@ class BentoGrid {
 
   setSubdivisionDepth(depth) {
     this.subdivisionDepth = depth;
+    this.regenerate();
+  }
+
+  setDiagonalChance(chance) {
+    this.diagonalChance = chance;
     this.regenerate();
   }
 
@@ -866,11 +681,6 @@ class BentoGrid {
   setFillRatio(value) {
     if (this.physics) this.physics.fillRatio = value;
   }
-
-  setDiagonalCount(value) {
-    this.diagonalCount = value;
-    // Note: Requires regenerate() to take effect
-  }
 }
 
 // ============================================
@@ -884,7 +694,7 @@ function updateMetrics() {
   if (metricsEl) {
     metricsEl.innerHTML = `
       <div><span style="opacity:0.5">Cells:</span> ${bentoGrid.getShapeCount()}</div>
-      <div><span style="opacity:0.5">Edges:</span> ${bentoGrid.getEdgeCount()}</div>
+      <div><span style="opacity:0.5">Diagonals:</span> ${bentoGrid.getDiagonalCount()}</div>
     `;
   }
 }
@@ -894,7 +704,6 @@ let bentoGrid;
 function init() {
   bentoGrid = new BentoGrid('container');
 
-  // Wire up all controls
   const controls = {
     subdivisions: {
       el: document.getElementById('subdivisions'),
@@ -963,15 +772,14 @@ function init() {
       el: document.getElementById('diagonals'),
       display: document.getElementById('diagonalsValue'),
       handler: (val) => {
-        bentoGrid.setDiagonalCount(parseInt(val));
-        bentoGrid.regenerate();
+        // Convert 0-20 slider to 0-1 chance
+        bentoGrid.setDiagonalChance(parseInt(val) / 20);
         updateMetrics();
       },
       format: (val) => val
     }
   };
 
-  // Setup each control
   for (const [, ctrl] of Object.entries(controls)) {
     if (ctrl.el) {
       ctrl.el.addEventListener('input', (e) => {
@@ -981,7 +789,6 @@ function init() {
     }
   }
 
-  // Regenerate button
   document.getElementById('regen').addEventListener('click', () => {
     bentoGrid.regenerate();
     updateMetrics();
