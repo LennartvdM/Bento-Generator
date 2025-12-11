@@ -779,9 +779,11 @@ class BentoGrid {
         ctx.save();
         ctx.clip();
 
-        // Image zoom: zoomed in by default (1.3x), zooms out on hover (1.0x)
+        // Image zoom: zoomed in by default, zooms out on hover
+        // Account for cell expansion: if cell expands to hoverScale (e.g. 1.4x),
+        // image must zoom to (1.0 / hoverScale) to achieve 1.0x effective zoom
         const defaultZoom = 1.3;
-        const hoverZoom = 1.0;
+        const hoverZoom = 1.0 / this.hoverScale;
         const zoom = isHovered ? hoverZoom : defaultZoom;
 
         const cellW = maxX - minX;
