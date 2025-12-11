@@ -66,6 +66,9 @@ class Cell {
     // Diagonal clips: { diagonal: DiagonalEdge, keepSide: 'positive' | 'negative' }
     // This cell's rectangle is clipped by these diagonals
     this.diagonalClips = [];
+
+    // Image for cell (loaded on populate)
+    this.image = null;
   }
 
   // Derived properties from edges
@@ -739,10 +742,9 @@ class BentoGrid {
       const isHovered = cell === this.hoveredCell;
       const isOutside = minX < 0 || minY < 0 || maxX > this.width || maxY > this.height;
 
-      ctx.fillStyle = isHovered ? '#ef4444' : cell.color;
-      ctx.globalAlpha = isOutside ? 0.5 : 0.9;
+      ctx.globalAlpha = isOutside ? 0.5 : 1;
 
-      // Draw rounded polygon
+      // Build rounded polygon path
       ctx.beginPath();
       const n = vertices.length;
       for (let i = 0; i < n; i++) {
@@ -771,9 +773,49 @@ class BentoGrid {
         }
       }
       ctx.closePath();
-      ctx.fill();
 
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      // Draw image or color
+      if (cell.image && cell.image.complete && cell.image.naturalWidth > 0) {
+        ctx.save();
+        ctx.clip();
+
+        // Image zoom: zoomed in by default (1.15x), zooms out on hover (1.0x)
+        const defaultZoom = 1.15;
+        const hoverZoom = 1.0;
+        const zoom = isHovered ? hoverZoom : defaultZoom;
+
+        const cellW = maxX - minX;
+        const cellH = maxY - minY;
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+
+        // Scale image to cover cell, then apply zoom
+        const imgAspect = cell.image.naturalWidth / cell.image.naturalHeight;
+        const cellAspect = cellW / cellH;
+
+        let drawW, drawH;
+        if (imgAspect > cellAspect) {
+          // Image is wider - fit to height
+          drawH = cellH * zoom;
+          drawW = drawH * imgAspect;
+        } else {
+          // Image is taller - fit to width
+          drawW = cellW * zoom;
+          drawH = drawW / imgAspect;
+        }
+
+        const drawX = centerX - drawW / 2;
+        const drawY = centerY - drawH / 2;
+
+        ctx.drawImage(cell.image, drawX, drawY, drawW, drawH);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = isHovered ? '#ef4444' : cell.color;
+        ctx.fill();
+      }
+
+      // Stroke
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
@@ -797,6 +839,23 @@ class BentoGrid {
   setRippleSpeed(v) { if (this.physics) this.physics.rippleSpeed = v; }
   setOvershoot(v) { if (this.physics) this.physics.overshoot = v; }
   setFillRatio(v) { if (this.physics) this.physics.fillRatio = v; }
+
+  // Populate cells with random Unsplash images
+  populateImages() {
+    if (!this.grid) return;
+
+    for (const cell of this.grid.cells) {
+      // Use rest dimensions for image sizing (add extra for zoom buffer)
+      const w = Math.ceil(cell.restWidth * 1.3);
+      const h = Math.ceil(cell.restHeight * 1.3);
+      const seed = Math.random().toString(36).substring(7);
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = `https://picsum.photos/seed/${seed}/${w}/${h}`;
+      cell.image = img;
+    }
+  }
 }
 
 // ============================================
@@ -847,6 +906,10 @@ function init() {
   document.getElementById('regen').addEventListener('click', () => {
     bentoGrid.regenerate();
     updateMetrics();
+  });
+
+  document.getElementById('populate').addEventListener('click', () => {
+    bentoGrid.populateImages();
   });
 
   updateMetrics();
