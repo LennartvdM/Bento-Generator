@@ -859,9 +859,9 @@ class BentoGrid {
   setImageZoom(v) { this.imageZoom = v; }
   setImageZoomSpeed(v) { this.imageZoomSpeed = v; }
 
-  // Export the grid as standalone HTML
-  exportHTML() {
-    if (!this.grid) return;
+  // Generate HTML for the grid
+  generateHTML() {
+    if (!this.grid) return '';
 
     // Build cell data with easy-to-edit structure
     const cellsData = this.grid.cells.map((cell, i) => {
@@ -885,7 +885,7 @@ class BentoGrid {
       };
     });
 
-    const html = `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -963,6 +963,26 @@ ${cellsData.map(cell => `    <div class="bento-cell" style="left: ${cell.left}%;
   </script>
 </body>
 </html>`;
+  }
+
+  // Preview the grid in a new tab
+  previewHTML() {
+    const html = this.generateHTML();
+    if (!html) return;
+
+    // Open in new tab using blob URL
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+
+    // Clean up the URL after a delay to allow the page to load
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Export the grid as downloadable HTML file
+  exportHTML() {
+    const html = this.generateHTML();
+    if (!html) return;
 
     // Download as HTML file
     const blob = new Blob([html], { type: 'text/html' });
@@ -1046,6 +1066,10 @@ function init() {
 
   document.getElementById('populate').addEventListener('click', () => {
     bentoGrid.populateImages();
+  });
+
+  document.getElementById('preview').addEventListener('click', () => {
+    bentoGrid.previewHTML();
   });
 
   document.getElementById('export').addEventListener('click', () => {
