@@ -859,27 +859,57 @@ class BentoGrid {
   setImageZoom(v) { this.imageZoom = v; }
   setImageZoomSpeed(v) { this.imageZoomSpeed = v; }
 
-  // Generate HTML for the grid
+  // Serialize the current grid state for export
+  serializeGrid() {
+    const edges = {};
+    for (const [id, edge] of this.grid.edges) {
+      edges[id] = {
+        id: edge.id,
+        rest: edge.rest,
+        isHorizontal: edge.isHorizontal,
+        isBoundary: edge.isBoundary
+      };
+    }
+
+    const diagonals = {};
+    for (const [id, diag] of this.grid.diagonals) {
+      diagonals[id] = {
+        id: diag.id,
+        restX1: diag.restX1, restY1: diag.restY1,
+        restX2: diag.restX2, restY2: diag.restY2
+      };
+    }
+
+    const cells = this.grid.cells.map((cell, i) => ({
+      id: cell.id,
+      topId: cell.top.id,
+      bottomId: cell.bottom.id,
+      leftId: cell.left.id,
+      rightId: cell.right.id,
+      color: cell.color,
+      diagonalClips: cell.diagonalClips.map(clip => ({
+        diagonalId: clip.diagonal.id,
+        keepSide: clip.keepSide
+      }))
+    }));
+
+    return { edges, diagonals, cells, width: this.width, height: this.height };
+  }
+
+  // Generate self-contained HTML with full physics engine
   generateHTML() {
     if (!this.grid) return '';
 
-    // Build cell data with easy-to-edit structure
-    const cellsData = this.grid.cells.map((cell, i) => {
-      const vertices = cell.getVertices(this.gap);
-      const clipPath = vertices.length > 0
-        ? vertices.map(v => `${((v.x / this.width) * 100).toFixed(2)}% ${((v.y / this.height) * 100).toFixed(2)}%`).join(', ')
-        : '';
+    const gridData = this.serializeGrid();
 
+    // Build image configuration for users to edit
+    const imageConfig = this.grid.cells.map((cell, i) => {
+      const w = Math.ceil(cell.restWidth * 1.3);
+      const h = Math.ceil(cell.restHeight * 1.3);
+      const seed = Math.random().toString(36).substring(7);
       return {
-        id: i,
-        left: ((cell.restX / this.width) * 100).toFixed(2),
-        top: ((cell.restY / this.height) * 100).toFixed(2),
-        width: ((cell.restWidth / this.width) * 100).toFixed(2),
-        height: ((cell.restHeight / this.height) * 100).toFixed(2),
-        color: cell.color,
-        clipPath: clipPath,
-        // User-editable fields
-        image: 'https://picsum.photos/600/400',
+        cellId: i,
+        image: cell.image?.src || `https://picsum.photos/seed/${seed}/${w}/${h}`,
         link: '#',
         alt: `Cell ${i + 1}`
       };
@@ -893,73 +923,509 @@ class BentoGrid {
   <title>Bento Grid</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
-
-    .bento-container {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-      background: #0f172a;
-    }
-
-    .bento-cell {
-      position: absolute;
-      overflow: hidden;
-      transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1);
-      will-change: transform;
-    }
-
-    .bento-cell:hover {
-      transform: scale(${this.hoverScale});
-      z-index: 100;
-    }
-
-    .bento-cell img {
-      position: absolute;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1);
-      transform: scale(${this.imageZoom});
-    }
-
-    .bento-cell:hover img {
-      transform: scale(1);
-    }
-
-    .bento-cell a {
-      display: block;
-      width: 100%;
-      height: 100%;
-      position: relative;
-    }
+    body { background: #0f172a; overflow: hidden; }
+    #container { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="bento-container">
-${cellsData.map(cell => `    <div class="bento-cell" style="left: ${cell.left}%; top: ${cell.top}%; width: ${cell.width}%; height: ${cell.height}%; ${cell.clipPath ? `clip-path: polygon(${cell.clipPath});` : ''}">
-      <a href="${cell.link}" target="_blank">
-        <img src="${cell.image}" alt="${cell.alt}">
-      </a>
-    </div>`).join('\n')}
-  </div>
+  <div id="container"></div>
 
   <script>
-    // CONFIGURATION: Edit your images and links here
-    const cellConfig = ${JSON.stringify(cellsData, null, 2)};
+// ============================================
+// CONFIGURATION - Edit your images and links here!
+// ============================================
+const IMAGE_CONFIG = ${JSON.stringify(imageConfig, null, 2)};
 
-    // Apply configuration to cells
-    const cells = document.querySelectorAll('.bento-cell');
-    cells.forEach((cell, i) => {
-      const config = cellConfig[i];
-      const img = cell.querySelector('img');
-      const link = cell.querySelector('a');
+// Grid settings (adjust if needed)
+const SETTINGS = {
+  gap: ${this.gap},
+  hoverScale: ${this.hoverScale},
+  imageZoom: ${this.imageZoom},
+  imageZoomSpeed: ${this.imageZoomSpeed}
+};
 
-      if (img && config.image) img.src = config.image;
-      if (img && config.alt) img.alt = config.alt;
-      if (link && config.link) link.href = config.link;
+// Physics settings
+const PHYSICS = {
+  springStrength: ${this.physics?.springStrength || 0.12},
+  damping: ${this.physics?.damping || 0.88},
+  incompressibility: ${this.physics?.incompressibility || 0.7},
+  minSizeRatio: ${this.physics?.minSizeRatio || 0.5},
+  bleedZone: ${this.physics?.bleedZone || 50},
+  scaleSpeed: ${this.physics?.scaleSpeed || 0.15},
+  rippleSpeed: ${this.physics?.rippleSpeed || 0.10},
+  overshoot: ${this.physics?.overshoot || 0.15},
+  fillRatio: ${this.physics?.fillRatio || 0}
+};
+
+// ============================================
+// GRID DATA (generated - don't edit)
+// ============================================
+const GRID_DATA = ${JSON.stringify(gridData)};
+
+// ============================================
+// PHYSICS ENGINE
+// ============================================
+const PALETTE = [
+  '#22d3ee', '#38bdf8', '#60a5fa', '#3b82f6', '#2563eb',
+  '#34d399', '#10b981', '#14b8a6', '#06b6d4', '#0891b2',
+  '#0ea5e9', '#0284c7', '#0d9488', '#059669', '#2dd4bf', '#5eead4'
+];
+
+class Edge {
+  constructor(id, position, isHorizontal, isBoundary = false) {
+    this.id = id;
+    this.isHorizontal = isHorizontal;
+    this.isBoundary = isBoundary;
+    this.rest = position;
+    this.pos = position;
+    this.velocity = 0;
+    this.force = 0;
+  }
+}
+
+class DiagonalEdge {
+  constructor(id, x1, y1, x2, y2) {
+    this.id = id;
+    this.restX1 = x1; this.restY1 = y1;
+    this.restX2 = x2; this.restY2 = y2;
+    this.x1 = x1; this.y1 = y1;
+    this.x2 = x2; this.y2 = y2;
+    this.velocity = { x1: 0, y1: 0, x2: 0, y2: 0 };
+    this.force = { x1: 0, y1: 0, x2: 0, y2: 0 };
+  }
+}
+
+class Cell {
+  constructor(id, topEdge, bottomEdge, leftEdge, rightEdge) {
+    this.id = id;
+    this.top = topEdge;
+    this.bottom = bottomEdge;
+    this.left = leftEdge;
+    this.right = rightEdge;
+    this.color = PALETTE[id % PALETTE.length];
+    this.diagonalClips = [];
+    this.image = null;
+  }
+
+  get x() { return this.left.pos; }
+  get y() { return this.top.pos; }
+  get width() { return this.right.pos - this.left.pos; }
+  get height() { return this.bottom.pos - this.top.pos; }
+  get restX() { return this.left.rest; }
+  get restY() { return this.top.rest; }
+  get restWidth() { return this.right.rest - this.left.rest; }
+  get restHeight() { return this.bottom.rest - this.top.rest; }
+
+  getVertices(gap = 0) {
+    const halfGap = gap / 2;
+    const l = this.left.pos + halfGap;
+    const r = this.right.pos - halfGap;
+    const t = this.top.pos + halfGap;
+    const b = this.bottom.pos - halfGap;
+    let vertices = [{ x: l, y: t }, { x: r, y: t }, { x: r, y: b }, { x: l, y: b }];
+    for (const clip of this.diagonalClips) {
+      vertices = this.clipByDiagonal(vertices, clip.diagonal, clip.keepSide, gap);
+    }
+    return vertices;
+  }
+
+  clipByDiagonal(vertices, diag, keepSide, gap) {
+    if (vertices.length < 3) return vertices;
+    const halfGap = gap / 2;
+    const dx = diag.x2 - diag.x1;
+    const dy = diag.y2 - diag.y1;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.001) return vertices;
+    const perpX = -dy / len * halfGap;
+    const perpY = dx / len * halfGap;
+    const offsetMult = keepSide === 'positive' ? 1 : -1;
+    const ox1 = diag.x1 + perpX * offsetMult;
+    const oy1 = diag.y1 + perpY * offsetMult;
+    const ox2 = diag.x2 + perpX * offsetMult;
+    const oy2 = diag.y2 + perpY * offsetMult;
+    const result = [];
+    for (let i = 0; i < vertices.length; i++) {
+      const curr = vertices[i];
+      const next = vertices[(i + 1) % vertices.length];
+      const currSide = (ox2 - ox1) * (curr.y - oy1) - (oy2 - oy1) * (curr.x - ox1);
+      const nextSide = (ox2 - ox1) * (next.y - oy1) - (oy2 - oy1) * (next.x - ox1);
+      const currInside = keepSide === 'positive' ? currSide >= 0 : currSide <= 0;
+      const nextInside = keepSide === 'positive' ? nextSide >= 0 : nextSide <= 0;
+      if (currInside) result.push(curr);
+      if (currInside !== nextInside) {
+        const t = currSide / (currSide - nextSide);
+        result.push({ x: curr.x + t * (next.x - curr.x), y: curr.y + t * (next.y - curr.y) });
+      }
+    }
+    return result;
+  }
+
+  containsPoint(px, py, gap = 0) {
+    if (px < this.x || px > this.x + this.width || py < this.y || py > this.y + this.height) return false;
+    if (this.diagonalClips.length === 0) return true;
+    const vertices = this.getVertices(gap);
+    if (vertices.length < 3) return false;
+    let inside = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i].x, yi = vertices[i].y;
+      const xj = vertices[j].x, yj = vertices[j].y;
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+}
+
+class PhysicsEngine {
+  constructor(edges, diagonals, cells) {
+    this.edges = edges;
+    this.diagonals = diagonals;
+    this.cells = cells;
+    this.hoveredCell = null;
+    this.hoverScale = 1;
+    this.hoveredEdges = new Set();
+    Object.assign(this, PHYSICS);
+  }
+
+  applyHoverForce(cell, scale) {
+    if (!cell) return;
+    this.hoveredCell = cell;
+    this.hoverScale = scale;
+    this.hoveredEdges.clear();
+    this.hoveredEdges.add(cell.top);
+    this.hoveredEdges.add(cell.bottom);
+    this.hoveredEdges.add(cell.left);
+    this.hoveredEdges.add(cell.right);
+
+    const cx = cell.restX + cell.restWidth / 2;
+    const cy = cell.restY + cell.restHeight / 2;
+    const aspect = cell.restWidth / cell.restHeight;
+    let scaleX = scale, scaleY = scale;
+
+    if (this.fillRatio > 0) {
+      if (aspect > 1) scaleY = 1 + (scale - 1) * (1 + (aspect - 1) * this.fillRatio);
+      else if (aspect < 1) scaleX = 1 + (scale - 1) * (1 + (1/aspect - 1) * this.fillRatio);
+    }
+
+    const targetHalfW = (cell.restWidth * scaleX) / 2;
+    const targetHalfH = (cell.restHeight * scaleY) / 2;
+
+    if (!cell.top.isBoundary) { cell.top.pos += (cy - targetHalfH - cell.top.pos) * this.scaleSpeed; cell.top.velocity = 0; }
+    if (!cell.bottom.isBoundary) { cell.bottom.pos += (cy + targetHalfH - cell.bottom.pos) * this.scaleSpeed; cell.bottom.velocity = 0; }
+    if (!cell.left.isBoundary) { cell.left.pos += (cx - targetHalfW - cell.left.pos) * this.scaleSpeed; cell.left.velocity = 0; }
+    if (!cell.right.isBoundary) { cell.right.pos += (cx + targetHalfW - cell.right.pos) * this.scaleSpeed; cell.right.velocity = 0; }
+
+    for (const clip of cell.diagonalClips) {
+      const diag = clip.diagonal;
+      const scale2 = (scaleX + scaleY) / 2;
+      diag.x1 += (cx + (diag.restX1 - cx) * scale2 - diag.x1) * this.scaleSpeed;
+      diag.y1 += (cy + (diag.restY1 - cy) * scale2 - diag.y1) * this.scaleSpeed;
+      diag.x2 += (cx + (diag.restX2 - cx) * scale2 - diag.x2) * this.scaleSpeed;
+      diag.y2 += (cy + (diag.restY2 - cy) * scale2 - diag.y2) * this.scaleSpeed;
+    }
+  }
+
+  applyIncompressibility(topBoundary, bottomBoundary, leftBoundary, rightBoundary) {
+    if (!this.hoveredCell) return;
+    const hoverCx = this.hoveredCell.restX + this.hoveredCell.restWidth / 2;
+    const hoverCy = this.hoveredCell.restY + this.hoveredCell.restHeight / 2;
+
+    for (const cell of this.cells) {
+      if (cell === this.hoveredCell) continue;
+      const widthRatio = cell.width / cell.restWidth;
+      const heightRatio = cell.height / cell.restHeight;
+      const cellCx = cell.restX + cell.restWidth / 2;
+      const cellCy = cell.restY + cell.restHeight / 2;
+      const dirX = cellCx - hoverCx;
+      const dirY = cellCy - hoverCy;
+
+      if (widthRatio < this.minSizeRatio) {
+        const deficit = cell.restWidth * this.minSizeRatio - cell.width;
+        const force = deficit * this.incompressibility * 1.5;
+        if (!this.hoveredEdges.has(cell.left) && dirX <= 0) cell.left.force -= force;
+        if (!this.hoveredEdges.has(cell.right) && dirX >= 0) cell.right.force += force;
+      }
+      if (heightRatio < this.minSizeRatio) {
+        const deficit = cell.restHeight * this.minSizeRatio - cell.height;
+        const force = deficit * this.incompressibility * 1.5;
+        if (!this.hoveredEdges.has(cell.top) && dirY <= 0) cell.top.force -= force;
+        if (!this.hoveredEdges.has(cell.bottom) && dirY >= 0) cell.bottom.force += force;
+      }
+    }
+  }
+
+  integrateForces(topBoundary, bottomBoundary, leftBoundary, rightBoundary) {
+    const effectiveDamping = this.damping - this.overshoot * 0.3;
+
+    for (const [, edge] of this.edges) {
+      if (this.hoveredEdges.has(edge)) { edge.force = 0; continue; }
+      const springMult = edge.isBoundary ? 3 : 1;
+      const springForce = (edge.rest - edge.pos) * this.springStrength * springMult;
+      edge.velocity += (edge.force + springForce) * this.rippleSpeed;
+      edge.velocity *= effectiveDamping;
+      edge.pos += edge.velocity;
+
+      if (edge.isBoundary) {
+        const bleed = this.bleedZone;
+        if (edge === topBoundary || edge === leftBoundary) {
+          edge.pos = Math.max(edge.rest - bleed, Math.min(edge.rest, edge.pos));
+        } else {
+          edge.pos = Math.min(edge.rest + bleed, Math.max(edge.rest, edge.pos));
+        }
+      }
+      edge.force = 0;
+    }
+
+    for (const [, diag] of this.diagonals) {
+      diag.velocity.x1 += (diag.restX1 - diag.x1) * this.springStrength * this.rippleSpeed;
+      diag.velocity.y1 += (diag.restY1 - diag.y1) * this.springStrength * this.rippleSpeed;
+      diag.velocity.x2 += (diag.restX2 - diag.x2) * this.springStrength * this.rippleSpeed;
+      diag.velocity.y2 += (diag.restY2 - diag.y2) * this.springStrength * this.rippleSpeed;
+      diag.velocity.x1 *= effectiveDamping; diag.velocity.y1 *= effectiveDamping;
+      diag.velocity.x2 *= effectiveDamping; diag.velocity.y2 *= effectiveDamping;
+      diag.x1 += diag.velocity.x1; diag.y1 += diag.velocity.y1;
+      diag.x2 += diag.velocity.x2; diag.y2 += diag.velocity.y2;
+    }
+  }
+
+  clearHover() { this.hoveredCell = null; this.hoverScale = 1; this.hoveredEdges.clear(); }
+}
+
+// ============================================
+// BENTO GRID RENDERER
+// ============================================
+class BentoGrid {
+  constructor(containerId) {
+    this.container = document.getElementById(containerId);
+    this.canvas = document.createElement('canvas');
+    this.ctx = this.canvas.getContext('2d');
+    this.container.appendChild(this.canvas);
+
+    this.gap = SETTINGS.gap;
+    this.hoverScale = SETTINGS.hoverScale;
+    this.imageZoom = SETTINGS.imageZoom;
+    this.imageZoomSpeed = SETTINGS.imageZoomSpeed;
+
+    this.hoveredCell = null;
+    this.canvasOffsetX = 0;
+    this.canvasOffsetY = 0;
+    this.imageZoomState = new Map();
+
+    this.loadGrid();
+    this.updateDimensions();
+    this.setupEventListeners();
+    this.loadImages();
+    this.startAnimation();
+  }
+
+  loadGrid() {
+    const data = GRID_DATA;
+    this.baseWidth = data.width;
+    this.baseHeight = data.height;
+
+    // Reconstruct edges
+    this.edges = new Map();
+    for (const [id, e] of Object.entries(data.edges)) {
+      this.edges.set(id, new Edge(e.id, e.rest, e.isHorizontal, e.isBoundary));
+    }
+
+    // Find boundary edges
+    for (const [id, edge] of this.edges) {
+      if (edge.isBoundary && edge.isHorizontal && edge.rest === 0) this.topBoundary = edge;
+      if (edge.isBoundary && edge.isHorizontal && edge.rest === data.height) this.bottomBoundary = edge;
+      if (edge.isBoundary && !edge.isHorizontal && edge.rest === 0) this.leftBoundary = edge;
+      if (edge.isBoundary && !edge.isHorizontal && edge.rest === data.width) this.rightBoundary = edge;
+    }
+
+    // Reconstruct diagonals
+    this.diagonals = new Map();
+    for (const [id, d] of Object.entries(data.diagonals)) {
+      this.diagonals.set(id, new DiagonalEdge(d.id, d.restX1, d.restY1, d.restX2, d.restY2));
+    }
+
+    // Reconstruct cells
+    this.cells = data.cells.map(c => {
+      const cell = new Cell(c.id, this.edges.get(c.topId), this.edges.get(c.bottomId),
+                            this.edges.get(c.leftId), this.edges.get(c.rightId));
+      cell.color = c.color;
+      cell.diagonalClips = c.diagonalClips.map(clip => ({
+        diagonal: this.diagonals.get(clip.diagonalId),
+        keepSide: clip.keepSide
+      }));
+      return cell;
     });
+
+    this.physics = new PhysicsEngine(this.edges, this.diagonals, this.cells);
+  }
+
+  updateDimensions() {
+    const rect = this.container.getBoundingClientRect();
+    this.width = rect.width;
+    this.height = rect.height;
+
+    // Calculate scale to fit while maintaining aspect ratio
+    const scaleX = this.width / this.baseWidth;
+    const scaleY = this.height / this.baseHeight;
+    this.scale = Math.min(scaleX, scaleY);
+
+    // Center the grid
+    this.offsetX = (this.width - this.baseWidth * this.scale) / 2;
+    this.offsetY = (this.height - this.baseHeight * this.scale) / 2;
+
+    const padding = 200;
+    this.canvas.width = this.width + padding * 2;
+    this.canvas.height = this.height + padding * 2;
+    this.canvasOffsetX = padding;
+    this.canvasOffsetY = padding;
+    this.canvas.style.position = 'absolute';
+    this.canvas.style.left = \`-\${padding}px\`;
+    this.canvas.style.top = \`-\${padding}px\`;
+  }
+
+  setupEventListeners() {
+    window.addEventListener('resize', () => this.updateDimensions());
+
+    this.canvas.addEventListener('mousemove', (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const canvasX = e.clientX - rect.left - this.canvasOffsetX;
+      const canvasY = e.clientY - rect.top - this.canvasOffsetY;
+      // Transform to grid coordinates
+      const mx = (canvasX - this.offsetX) / this.scale;
+      const my = (canvasY - this.offsetY) / this.scale;
+
+      this.hoveredCell = null;
+      for (const cell of this.cells) {
+        if (cell.containsPoint(mx, my, this.gap)) { this.hoveredCell = cell; break; }
+      }
+    });
+
+    this.canvas.addEventListener('mouseleave', () => { this.hoveredCell = null; });
+
+    this.canvas.addEventListener('click', (e) => {
+      if (this.hoveredCell) {
+        const config = IMAGE_CONFIG.find(c => c.cellId === this.hoveredCell.id);
+        if (config && config.link && config.link !== '#') {
+          window.open(config.link, '_blank');
+        }
+      }
+    });
+  }
+
+  loadImages() {
+    for (const config of IMAGE_CONFIG) {
+      const cell = this.cells[config.cellId];
+      if (cell && config.image) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = config.image;
+        cell.image = img;
+      }
+    }
+  }
+
+  startAnimation() {
+    const tick = () => {
+      if (this.hoveredCell) {
+        this.physics.applyHoverForce(this.hoveredCell, this.hoverScale);
+      } else {
+        this.physics.clearHover();
+      }
+      this.physics.applyIncompressibility(this.topBoundary, this.bottomBoundary, this.leftBoundary, this.rightBoundary);
+      this.physics.integrateForces(this.topBoundary, this.bottomBoundary, this.leftBoundary, this.rightBoundary);
+      this.render();
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  render() {
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.save();
+    ctx.translate(this.canvasOffsetX + this.offsetX, this.canvasOffsetY + this.offsetY);
+    ctx.scale(this.scale, this.scale);
+
+    const radius = 6;
+
+    for (const cell of this.cells) {
+      const vertices = cell.getVertices(this.gap);
+      if (vertices.length < 3) continue;
+
+      const minX = Math.min(...vertices.map(v => v.x));
+      const minY = Math.min(...vertices.map(v => v.y));
+      const maxX = Math.max(...vertices.map(v => v.x));
+      const maxY = Math.max(...vertices.map(v => v.y));
+      if (maxX - minX <= 0 || maxY - minY <= 0) continue;
+
+      const isHovered = cell === this.hoveredCell;
+      const isOutside = minX < 0 || minY < 0 || maxX > this.baseWidth || maxY > this.baseHeight;
+      ctx.globalAlpha = isOutside ? 0.5 : 1;
+
+      // Build rounded polygon path
+      ctx.beginPath();
+      const n = vertices.length;
+      for (let i = 0; i < n; i++) {
+        const curr = vertices[i];
+        const next = vertices[(i + 1) % n];
+        const dx = next.x - curr.x, dy = next.y - curr.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.001) continue;
+        const r = Math.min(radius, len / 3);
+        if (i === 0) ctx.moveTo(curr.x + (dx / len) * r, curr.y + (dy / len) * r);
+        ctx.lineTo(next.x - (dx / len) * r, next.y - (dy / len) * r);
+        const afterNext = vertices[(i + 2) % n];
+        const dx2 = afterNext.x - next.x, dy2 = afterNext.y - next.y;
+        const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+        if (len2 > 0.001) {
+          const r2 = Math.min(radius, len2 / 3);
+          ctx.quadraticCurveTo(next.x, next.y, next.x + (dx2 / len2) * r2, next.y + (dy2 / len2) * r2);
+        }
+      }
+      ctx.closePath();
+
+      // Draw image or color
+      if (cell.image && cell.image.complete && cell.image.naturalWidth > 0) {
+        ctx.save();
+        ctx.clip();
+
+        const maxCellW = cell.restWidth * this.hoverScale;
+        const maxCellH = cell.restHeight * this.hoverScale;
+        const defaultZoom = this.imageZoom;
+        const hoverZoom = 1.0;
+        const targetZoom = isHovered ? hoverZoom : defaultZoom;
+
+        if (!this.imageZoomState.has(cell.id)) this.imageZoomState.set(cell.id, defaultZoom);
+        let currentZoom = this.imageZoomState.get(cell.id);
+        currentZoom += (targetZoom - currentZoom) * this.imageZoomSpeed;
+        this.imageZoomState.set(cell.id, currentZoom);
+
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const imgAspect = cell.image.naturalWidth / cell.image.naturalHeight;
+        const cellAspect = maxCellW / maxCellH;
+
+        let drawW, drawH;
+        if (imgAspect > cellAspect) { drawH = maxCellH * currentZoom; drawW = drawH * imgAspect; }
+        else { drawW = maxCellW * currentZoom; drawH = drawW / imgAspect; }
+
+        ctx.drawImage(cell.image, centerX - drawW / 2, centerY - drawH / 2, drawW, drawH);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = isHovered ? '#ef4444' : cell.color;
+        ctx.fill();
+      }
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Initialize
+new BentoGrid('container');
   </script>
 </body>
 </html>`;
