@@ -1271,7 +1271,8 @@ class BentoGrid {
     this.offsetX = (this.width - this.baseWidth * this.scale) / 2;
     this.offsetY = (this.height - this.baseHeight * this.scale) / 2;
 
-    const padding = 200;
+    // Scale padding proportionally (min 50px to ensure bleed zone always works)
+    const padding = Math.max(50, Math.round(200 * this.scale));
     this.canvas.width = this.width + padding * 2;
     this.canvas.height = this.height + padding * 2;
     this.canvasOffsetX = padding;
@@ -1281,24 +1282,45 @@ class BentoGrid {
     this.canvas.style.top = \`-\${padding}px\`;
   }
 
+  handlePointerMove(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const canvasX = clientX - rect.left - this.canvasOffsetX;
+    const canvasY = clientY - rect.top - this.canvasOffsetY;
+    // Transform to grid coordinates
+    const mx = (canvasX - this.offsetX) / this.scale;
+    const my = (canvasY - this.offsetY) / this.scale;
+
+    this.hoveredCell = null;
+    for (const cell of this.cells) {
+      if (cell.containsPoint(mx, my, this.gap)) { this.hoveredCell = cell; break; }
+    }
+  }
+
   setupEventListeners() {
     window.addEventListener('resize', () => this.updateDimensions());
 
-    this.canvas.addEventListener('mousemove', (e) => {
-      const rect = this.canvas.getBoundingClientRect();
-      const canvasX = e.clientX - rect.left - this.canvasOffsetX;
-      const canvasY = e.clientY - rect.top - this.canvasOffsetY;
-      // Transform to grid coordinates
-      const mx = (canvasX - this.offsetX) / this.scale;
-      const my = (canvasY - this.offsetY) / this.scale;
-
-      this.hoveredCell = null;
-      for (const cell of this.cells) {
-        if (cell.containsPoint(mx, my, this.gap)) { this.hoveredCell = cell; break; }
-      }
-    });
-
+    // Mouse events
+    this.canvas.addEventListener('mousemove', (e) => this.handlePointerMove(e.clientX, e.clientY));
     this.canvas.addEventListener('mouseleave', () => { this.hoveredCell = null; });
+
+    // Touch events for mobile
+    this.canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.handlePointerMove(touch.clientX, touch.clientY);
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.handlePointerMove(touch.clientX, touch.clientY);
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchend', () => { this.hoveredCell = null; });
 
     this.canvas.addEventListener('click', (e) => {
       if (this.hoveredCell) {
