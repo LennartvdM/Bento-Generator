@@ -859,6 +859,34 @@ class BentoGrid {
   setImageZoom(v) { this.imageZoom = v; }
   setImageZoomSpeed(v) { this.imageZoomSpeed = v; }
 
+  // Export the visible grid as PNG
+  exportImage() {
+    // Create a temporary canvas with just the visible grid (no padding)
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = this.width;
+    exportCanvas.height = this.height;
+    const exportCtx = exportCanvas.getContext('2d');
+
+    // Copy the visible portion from the main canvas
+    exportCtx.drawImage(
+      this.canvas,
+      this.canvasOffsetX, this.canvasOffsetY,
+      this.width, this.height,
+      0, 0,
+      this.width, this.height
+    );
+
+    // Download as PNG
+    exportCanvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bento-grid-${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  }
+
   // Populate cells with random Unsplash images
   populateImages() {
     if (!this.grid) return;
@@ -931,6 +959,10 @@ function init() {
 
   document.getElementById('populate').addEventListener('click', () => {
     bentoGrid.populateImages();
+  });
+
+  document.getElementById('export').addEventListener('click', () => {
+    bentoGrid.exportImage();
   });
 
   updateMetrics();
