@@ -859,32 +859,119 @@ class BentoGrid {
   setImageZoom(v) { this.imageZoom = v; }
   setImageZoomSpeed(v) { this.imageZoomSpeed = v; }
 
-  // Export the visible grid as PNG
-  exportImage() {
-    // Create a temporary canvas with just the visible grid (no padding)
-    const exportCanvas = document.createElement('canvas');
-    exportCanvas.width = this.width;
-    exportCanvas.height = this.height;
-    const exportCtx = exportCanvas.getContext('2d');
+  // Export the grid as standalone HTML
+  exportHTML() {
+    if (!this.grid) return;
 
-    // Copy the visible portion from the main canvas
-    exportCtx.drawImage(
-      this.canvas,
-      this.canvasOffsetX, this.canvasOffsetY,
-      this.width, this.height,
-      0, 0,
-      this.width, this.height
-    );
+    // Build cell data with easy-to-edit structure
+    const cellsData = this.grid.cells.map((cell, i) => {
+      const vertices = cell.getVertices(this.gap);
+      const clipPath = vertices.length > 0
+        ? vertices.map(v => `${((v.x / this.width) * 100).toFixed(2)}% ${((v.y / this.height) * 100).toFixed(2)}%`).join(', ')
+        : '';
 
-    // Download as PNG
-    exportCanvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `bento-grid-${Date.now()}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
+      return {
+        id: i,
+        left: ((cell.restX / this.width) * 100).toFixed(2),
+        top: ((cell.restY / this.height) * 100).toFixed(2),
+        width: ((cell.restWidth / this.width) * 100).toFixed(2),
+        height: ((cell.restHeight / this.height) * 100).toFixed(2),
+        color: cell.color,
+        clipPath: clipPath,
+        // User-editable fields
+        image: 'https://picsum.photos/600/400',
+        link: '#',
+        alt: `Cell ${i + 1}`
+      };
     });
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bento Grid</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+
+    .bento-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #0f172a;
+    }
+
+    .bento-cell {
+      position: absolute;
+      overflow: hidden;
+      transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+      will-change: transform;
+    }
+
+    .bento-cell:hover {
+      transform: scale(${this.hoverScale});
+      z-index: 100;
+    }
+
+    .bento-cell img {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+      transform: scale(${this.imageZoom});
+    }
+
+    .bento-cell:hover img {
+      transform: scale(1);
+    }
+
+    .bento-cell a {
+      display: block;
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+  </style>
+</head>
+<body>
+  <div class="bento-container">
+${cellsData.map(cell => `    <div class="bento-cell" style="left: ${cell.left}%; top: ${cell.top}%; width: ${cell.width}%; height: ${cell.height}%; ${cell.clipPath ? `clip-path: polygon(${cell.clipPath});` : ''}">
+      <a href="${cell.link}" target="_blank">
+        <img src="${cell.image}" alt="${cell.alt}">
+      </a>
+    </div>`).join('\n')}
+  </div>
+
+  <script>
+    // CONFIGURATION: Edit your images and links here
+    const cellConfig = ${JSON.stringify(cellsData, null, 2)};
+
+    // Apply configuration to cells
+    const cells = document.querySelectorAll('.bento-cell');
+    cells.forEach((cell, i) => {
+      const config = cellConfig[i];
+      const img = cell.querySelector('img');
+      const link = cell.querySelector('a');
+
+      if (img && config.image) img.src = config.image;
+      if (img && config.alt) img.alt = config.alt;
+      if (link && config.link) link.href = config.link;
+    });
+  </script>
+</body>
+</html>`;
+
+    // Download as HTML file
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bento-grid-${Date.now()}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // Populate cells with random Unsplash images
@@ -962,7 +1049,7 @@ function init() {
   });
 
   document.getElementById('export').addEventListener('click', () => {
-    bentoGrid.exportImage();
+    bentoGrid.exportHTML();
   });
 
   updateMetrics();
